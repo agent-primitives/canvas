@@ -10,6 +10,17 @@ make build
 `make test` checks the shipped offline default in isolation; your ignored local
 configuration does not change the config-dependent CLI tests.
 
+`make test-canvas` runs all `internal/canvas` race tests in four deterministic,
+concurrent processes. `make test` and CI use this same target. Each shard keeps
+its tests serial and retains the 600-second package timeout; no assertions or
+existing skip conditions change. Tests are discovered from the compiled package,
+so new tests are included automatically and subtests stay with their parent.
+Canvas tests run uncached (`-count=1`). The command prints a retained temporary
+log directory with per-shard JSON output, scalar timings and the 20 slowest tests.
+Interrupting the command with SIGINT or SIGTERM stops every shard process group,
+including test descendants, before the runner exits.
+For an unsharded diagnostic run, use `go test -race -json -count=1 ./internal/canvas`.
+
 The Python helpers and tests use only the Python 3.10+ standard library.
 CI selects Python 3.12 and runs the same `make test`. You can select another
 interpreter with `make test PYTHON=/path/to/python`.
