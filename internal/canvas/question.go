@@ -66,6 +66,11 @@ func (c *Canvas) Ask(runID, text, role string) (string, error) {
 // within the request lifetime under the execution service. The queued turn
 // then runs under the engine's lifetime, never the HTTP request's.
 func (c *Canvas) AskContext(ctx context.Context, runID, text, role string) (string, error) {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+	if err := c.competingFlow(); err != nil {
+		return "", err
+	}
 	_, requestedBy, err := c.requester(ctx, role)
 	if err != nil {
 		return "", err
@@ -80,7 +85,7 @@ func (c *Canvas) AskContext(ctx context.Context, runID, text, role string) (stri
 		c.mu.Unlock()
 		return "", errNotFound
 	}
-	if !questionBinding(original) || !c.ownedLocked(original.ExecutionOwner) {
+	if original.FlowRun != "" || !questionBinding(original) || !c.ownedLocked(original.ExecutionOwner) {
 		c.mu.Unlock()
 		return "", ErrQuestionsUnsupported
 	}
