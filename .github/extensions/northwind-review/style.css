@@ -71,6 +71,15 @@ button:active:not(:disabled) { filter: brightness(.85); }
 button:disabled { opacity: .45; cursor: not-allowed; }
 select { max-width: 100%; width: 100%; background: var(--paper); color: var(--ink); padding: .5rem; }
 label { display: block; }
+input[type="number"], textarea { width: 100%; max-width: 100%; min-height: 44px; padding: .5rem; border: 1px solid var(--line); border-radius: .25rem; background: var(--paper); color: var(--ink); font: inherit; }
+textarea { resize: vertical; }
+#flow-definition, #flow-record, #flow-steps { overflow-wrap: anywhere; }
+#flow-status { font-weight: 600; }
+#flow-steps { padding-left: 1.5rem; }
+#flow-steps li { padding: .5rem; border-left: 2px solid var(--line); margin-block: .5rem; }
+#flow-steps li[aria-current="step"] { border-color: var(--blue); }
+#flow-steps p { margin-block: .25rem; }
+#flow-steps span { font-size: .875rem; color: var(--muted); }
 .confirm { display: flex; align-items: flex-start; gap: .5rem; margin: 1rem 0; }
 .confirm input { margin-top: .4rem; flex: none; }
 pre {
