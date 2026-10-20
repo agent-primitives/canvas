@@ -65,8 +65,11 @@ func StartAt(root, address string, bundles []contract.Bundle, provider controlle
 type Options struct {
 	Listener net.Listener
 	// Trusted assembly may supply TLS and auth interceptors; the default local demo remains unchanged.
-	ServerOptions  []grpc.ServerOption
-	BackendFactory func(contract.Bundle, int) (placement.Backend, func() error, error)
+	ServerOptions []grpc.ServerOption
+	// Borrowed local-only callback. Its owner closes the Store after Host.Close.
+	// Nil preserves the legacy executor and does not create durable state.
+	AnnouncementExecutor controller.ToolFunc
+	BackendFactory       func(contract.Bundle, int) (placement.Backend, func() error, error)
 }
 
 func StartWithOptions(root string, bundles []contract.Bundle, provider controller.ModelFunc, opts Options) (*Host, error) {
@@ -79,6 +82,9 @@ func StartWithOptions(root string, bundles []contract.Bundle, provider controlle
 			opts.Listener.Close()
 		}
 	}()
+	if opts.BackendFactory != nil && opts.AnnouncementExecutor != nil {
+		return nil, errors.New("sessionhost: local announcement executor requires the local runtime")
+	}
 	if root == "" || provider == nil {
 		return nil, errors.New("sessionhost: root and provider required")
 	}
@@ -147,9 +153,13 @@ func StartWithOptions(root string, bundles []contract.Bundle, provider controlle
 	// The deterministic simulation is native/local only, never a model bundle
 	// or a default candidate. Remote factories serve only their bundle contracts.
 	if opts.BackendFactory == nil {
-		backend := local.New(announcementHarness{})
+		backend := local.New(NewAnnouncementHarness())
 		h.closers = append(h.closers, backend.Close)
-		placers[announcement.HarnessName] = placement.New(backend, refuseAnnouncementModel, placement.WithToolExecutor(executeAnnouncement))
+		executor := opts.AnnouncementExecutor
+		if executor == nil {
+			executor = executeAnnouncement
+		}
+		placers[announcement.HarnessName] = placement.New(backend, refuseAnnouncementModel, placement.WithToolExecutor(executor))
 	}
 	sort.Strings(names)
 	defaultBundle := h.harnesses[names[0]].bundle

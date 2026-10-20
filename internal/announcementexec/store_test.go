@@ -92,7 +92,10 @@ func TestStoreRefusesExistingArtifactsUnchanged(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "bad-lock":
-				if err := os.WriteFile(filepath.Join(root, ".executor.lock"), nil, 0644); err != nil {
+				if err := os.WriteFile(filepath.Join(root, ".executor.lock"), nil, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Chmod(filepath.Join(root, ".executor.lock"), 0644); err != nil {
 					t.Fatal(err)
 				}
 			case "sidecar":

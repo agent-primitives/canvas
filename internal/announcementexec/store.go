@@ -41,6 +41,8 @@ type Store struct {
 	gate              chan struct{}
 	closed, uncertain bool
 	closeErr          error
+	afterAdmission    func()
+	commitFault       func(phase string, committed bool) error
 }
 
 func database(path string, ro bool) (*sql.DB, error) {
@@ -123,7 +125,7 @@ func syncDirectory(path string) error {
 	return f.Sync()
 }
 
-func validateSchema(ctx context.Context, db *sql.DB) (string, error) {
+func validateSchema(ctx context.Context, db queryer) (string, error) {
 	rows, err := db.QueryContext(ctx, `SELECT sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name`)
 	if err != nil {
 		return "", ErrUnavailable
@@ -183,16 +185,8 @@ func Open(root string) (*Store, error) {
 	path := filepath.Join(root, "executor.db")
 	// Probe existing schema without opening a write connection or creating a lock.
 	if exists {
-		ro, e := database(path, true)
-		if e != nil {
-			return nil, e
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_, e = validateSchema(ctx, ro)
-		cancel()
-		ro.Close()
-		if e != nil {
-			return nil, e
+		if _, err := ReadEvidence(context.Background(), root); err != nil {
+			return nil, err
 		}
 	}
 	if err = os.Mkdir(root, 0700); err != nil && !os.IsExist(err) {
@@ -274,6 +268,9 @@ func Open(root string) (*Store, error) {
 	}
 	id, err := validateSchema(ctx, db)
 	if err != nil {
+		return fail()
+	}
+	if _, err = validateRecords(ctx, db, id); err != nil {
 		return fail()
 	}
 	s := &Store{db: db, path: path, id: id, lease: lease, gate: make(chan struct{}, 1)}
