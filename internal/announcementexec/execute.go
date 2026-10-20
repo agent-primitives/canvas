@@ -192,10 +192,24 @@ func (s *Store) Execute(ctx context.Context, scope controller.ToolCallContext, c
 	conflict := false
 	err = s.transaction(ctx, "admission", func(c *sql.Conn) error {
 		var bound []byte
-		e := c.QueryRowContext(ctx, `SELECT snapshot FROM bindings WHERE session_uid=? AND operation=?`, scope.SessionUID, snapshot.Operation).Scan(&bound)
+		e := c.QueryRowContext(ctx, `SELECT CASE WHEN typeof(snapshot)='blob' AND length(snapshot)<=409600 THEN snapshot ELSE NULL END FROM bindings WHERE session_uid=? AND operation=?`, scope.SessionUID, snapshot.Operation).Scan(&bound)
 		if errors.Is(e, sql.ErrNoRows) {
 			_, e = c.ExecContext(ctx, `INSERT INTO bindings VALUES(?,?,?)`, scope.SessionUID, snapshot.Operation, canonical)
 		} else if e == nil {
+			if !validSnapshot(bound, snapshot.Operation) {
+				return errInconsistent
+			}
+			var first []byte
+			e = c.QueryRowContext(ctx, `SELECT CASE WHEN typeof(snapshot)='blob' AND length(snapshot)<=409600 THEN snapshot ELSE NULL END FROM invocations WHERE session_uid=? AND operation=? ORDER BY id LIMIT 1`, scope.SessionUID, snapshot.Operation).Scan(&first)
+			if errors.Is(e, sql.ErrNoRows) {
+				return errInconsistent
+			}
+			if e != nil {
+				return e
+			}
+			if !bytes.Equal(first, bound) {
+				return errInconsistent
+			}
 			conflict = !bytes.Equal(bound, canonical)
 		}
 		if e != nil {
@@ -208,7 +222,7 @@ func (s *Store) Execute(ctx context.Context, scope controller.ToolCallContext, c
 		invocation, e = result.LastInsertId()
 		return e
 	}, func() (bool, error) {
-		return s.confirm(`SELECT snapshot FROM invocations WHERE id=? AND session_uid=? AND operation=?`, []any{invocation, scope.SessionUID, snapshot.Operation}, canonical)
+		return s.confirm(`SELECT CASE WHEN typeof(snapshot)='blob' AND length(snapshot)<=409600 THEN snapshot ELSE NULL END FROM invocations WHERE id=? AND session_uid=? AND operation=?`, []any{invocation, scope.SessionUID, snapshot.Operation}, canonical)
 	})
 	if err != nil {
 		return api.ToolResult{}, err
@@ -222,7 +236,7 @@ func (s *Store) Execute(ctx context.Context, scope controller.ToolCallContext, c
 	receipt, _ := json.Marshal(announcement.Receipt{Kind: announcement.Kind, Snapshot: snapshot})
 	err = s.transaction(ctx, "outcome", func(c *sql.Conn) error {
 		var existing []byte
-		e := c.QueryRowContext(ctx, `SELECT receipt FROM outcomes WHERE session_uid=? AND operation=?`, scope.SessionUID, snapshot.Operation).Scan(&existing)
+		e := c.QueryRowContext(ctx, `SELECT CASE WHEN typeof(receipt)='blob' AND length(receipt)<=409600 THEN receipt ELSE NULL END FROM outcomes WHERE session_uid=? AND operation=?`, scope.SessionUID, snapshot.Operation).Scan(&existing)
 		if e == nil {
 			if !bytes.Equal(existing, receipt) {
 				return errInconsistent
@@ -235,7 +249,7 @@ func (s *Store) Execute(ctx context.Context, scope controller.ToolCallContext, c
 		_, e = c.ExecContext(ctx, `INSERT INTO outcomes VALUES(?,?,?)`, scope.SessionUID, snapshot.Operation, receipt)
 		return e
 	}, func() (bool, error) {
-		return s.confirm(`SELECT receipt FROM outcomes WHERE session_uid=? AND operation=?`, []any{scope.SessionUID, snapshot.Operation}, receipt)
+		return s.confirm(`SELECT CASE WHEN typeof(receipt)='blob' AND length(receipt)<=409600 THEN receipt ELSE NULL END FROM outcomes WHERE session_uid=? AND operation=?`, []any{scope.SessionUID, snapshot.Operation}, receipt)
 	})
 	if err != nil {
 		return api.ToolResult{}, err

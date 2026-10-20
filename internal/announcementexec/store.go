@@ -3,11 +3,13 @@
 package announcementexec
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -45,7 +47,32 @@ type Store struct {
 	commitFault       func(phase string, committed bool) error
 }
 
+// Reject unsupported WAL format before SQLite can create its sidecars, even
+// when mode=ro. Keep ordinary SQLite locking for supported rollback journals.
+func deleteHeader(path string) error {
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return ErrUnavailable
+	}
+	f := os.NewFile(uintptr(fd), "executor header")
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 {
+		return ErrUnavailable
+	}
+	var header [20]byte
+	if _, err = io.ReadFull(f, header[:]); err != nil || !bytes.Equal(header[:16], []byte("SQLite format 3\x00")) || header[18] != 1 || header[19] != 1 {
+		return ErrUnavailable
+	}
+	return nil
+}
+
 func database(path string, ro bool) (*sql.DB, error) {
+	if ro {
+		if err := deleteHeader(path); err != nil {
+			return nil, err
+		}
+	}
 	u := url.URL{Scheme: "file", Path: path}
 	q := u.Query()
 	if ro {
@@ -126,7 +153,7 @@ func syncDirectory(path string) error {
 }
 
 func validateSchema(ctx context.Context, db queryer) (string, error) {
-	rows, err := db.QueryContext(ctx, `SELECT sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' ORDER BY name`)
+	rows, err := db.QueryContext(ctx, `SELECT sql FROM sqlite_master WHERE name NOT GLOB 'sqlite_*' ORDER BY name`)
 	if err != nil {
 		return "", ErrUnavailable
 	}

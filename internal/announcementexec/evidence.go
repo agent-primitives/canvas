@@ -47,7 +47,7 @@ func validateRecords(ctx context.Context, q queryer, id string) (Evidence, error
 	// to the JSON decoder until it has passed the same envelope size bound.
 	for _, spec := range []struct{ table, column string }{{"bindings", "snapshot"}, {"invocations", "snapshot"}, {"outcomes", "receipt"}} {
 		var bad int
-		if q.QueryRowContext(ctx, "SELECT count(*) FROM "+spec.table+" WHERE length("+spec.column+") > 409600").Scan(&bad) != nil || bad != 0 {
+		if q.QueryRowContext(ctx, "SELECT count(*) FROM "+spec.table+" WHERE typeof("+spec.column+") != 'blob' OR length("+spec.column+") > 409600").Scan(&bad) != nil || bad != 0 {
 			return Evidence{}, ErrUnavailable
 		}
 	}
@@ -80,7 +80,7 @@ func validateRecords(ctx context.Context, q queryer, id string) (Evidence, error
 		return Evidence{}, ErrUnavailable
 	}
 	var unadmitted int
-	if q.QueryRowContext(ctx, `SELECT count(*) FROM bindings b WHERE NOT EXISTS(SELECT 1 FROM invocations i WHERE i.session_uid=b.session_uid AND i.operation=b.operation)`).Scan(&unadmitted) != nil || unadmitted != 0 {
+	if q.QueryRowContext(ctx, `SELECT count(*) FROM bindings b WHERE b.snapshot IS NOT (SELECT i.snapshot FROM invocations i WHERE i.session_uid=b.session_uid AND i.operation=b.operation ORDER BY i.id LIMIT 1)`).Scan(&unadmitted) != nil || unadmitted != 0 {
 		return Evidence{}, ErrUnavailable
 	}
 	rows, err = q.QueryContext(ctx, `SELECT id,session_uid,operation,snapshot FROM invocations ORDER BY id`)
