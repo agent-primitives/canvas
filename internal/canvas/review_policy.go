@@ -42,6 +42,20 @@ func NewReviewerPolicy(role string, reviewers []sessionauth.Identity) (ReviewAut
 	}
 	return reviewerPolicy{role: role, reviewers: slices.Clone(reviewers)}, nil
 }
+
+// NewFlowReviewerPolicy supplies explicit membership for a logical gate role;
+// declaring that role in YAML grants nothing.
+func NewFlowReviewerPolicy(role string, reviewers []sessionauth.Identity) (ReviewAuthorizer, error) {
+	if !definitionName.MatchString(role) || len(reviewers) == 0 {
+		return nil, errDocumentReviewDenied
+	}
+	for _, id := range reviewers {
+		if !id.Valid() {
+			return nil, errDocumentReviewDenied
+		}
+	}
+	return reviewerPolicy{role: role, reviewers: slices.Clone(reviewers)}, nil
+}
 func (p reviewerPolicy) AuthorizeReview(_ context.Context, r ReviewAuthorization) error {
 	if r.Role != p.role || !slices.Contains(p.reviewers, r.Reviewer) {
 		return errDocumentReviewDenied

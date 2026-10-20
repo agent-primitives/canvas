@@ -81,16 +81,25 @@ type reviewedSpace interface {
 }
 
 func (c *Canvas) ReviewContext(ctx context.Context, id, action, role string) (sharedspace.Proposal, error) {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+	return c.reviewFlowLocked(ctx, id, action, role, nil)
+}
+func (c *Canvas) reviewProposalLocked(ctx context.Context, id, action, role string, intent func() error) (sharedspace.Proposal, error) {
+	if action != "accept" && action != "reject" {
+		return sharedspace.Proposal{}, errors.New("invalid review action")
+	}
 	if _, err := c.actionIdentity(ctx, role); err != nil {
 		return sharedspace.Proposal{}, err
 	}
-	c.publicationMu.Lock()
-	defer c.publicationMu.Unlock()
-	if !validRole(role) {
+	if !c.flowRole(role) {
 		return sharedspace.Proposal{}, errors.New("invalid demo role")
 	}
 	identity, verified := sessionauth.Caller(ctx)
 	if !verified {
+		if err := intent(); err != nil {
+			return sharedspace.Proposal{}, err
+		}
 		return c.review(id, action, role)
 	}
 	if c.authenticated {
@@ -124,6 +133,9 @@ func (c *Canvas) ReviewContext(ctx context.Context, id, action, role string) (sh
 	store, ok := c.space.(reviewedSpace)
 	if !ok {
 		return sharedspace.Proposal{}, errors.New("workspace cannot retain verified review identity")
+	}
+	if err := intent(); err != nil {
+		return sharedspace.Proposal{}, err
 	}
 	reviewer := sharedspace.ReviewActor{Issuer: identity.Issuer, Subject: identity.Subject, Role: role}
 	if action == "reject" {

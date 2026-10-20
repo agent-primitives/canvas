@@ -45,6 +45,8 @@ var ErrMissingDocument = errors.New("document not present at revision")
 var ErrProposalNotFound = errors.New("proposal not found")
 
 type Attribution struct {
+	FlowRun  string `json:"flowRun,omitempty"`
+	FlowStep string `json:"flowStep,omitempty"`
 	// ReadInputs freezes input collection scopes, including future matching files.
 	ReadInputs           []string                `json:"readInputs,omitempty"`
 	Suite                *contract.SuiteIdentity `json:"suite,omitempty"`

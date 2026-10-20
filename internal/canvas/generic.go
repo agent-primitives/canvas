@@ -34,11 +34,17 @@ type DefinitionInfo struct {
 }
 
 func OpenDefined(root string, space sharedspace.SharedSpace, cl *client.Client, address string, definition *CompiledDefinition, binder contract.ContractBinder, archives ...*contract.ArchiveResolver) (*Canvas, error) {
-	if definition == nil || definition.Digest == "" || !definitionName.MatchString(definition.ID) || len(definition.documents) == 0 {
-		return nil, errors.New("compiled generic definition required")
+	if definition == nil {
+		return nil, errDefinition
 	}
 	if err := definition.RequireManualRuntime(); err != nil {
 		return nil, err
+	}
+	return openDefined(root, space, cl, address, definition, binder, archives...)
+}
+func openDefined(root string, space sharedspace.SharedSpace, cl *client.Client, address string, definition *CompiledDefinition, binder contract.ContractBinder, archives ...*contract.ArchiveResolver) (*Canvas, error) {
+	if definition == nil || definition.Digest == "" || !definitionName.MatchString(definition.ID) || len(definition.documents) == 0 {
+		return nil, errors.New("compiled generic definition required")
 	}
 	d := *definition
 	d.Documents = maps.Clone(d.Documents)
@@ -109,9 +115,12 @@ func (c *Canvas) bindDefinition(existing bool) error {
 }
 
 func (c *Canvas) snapshotGeneric(agent, request, role string) (attempt, error) {
+	return c.snapshotRequest(agent, request, role, 2000)
+}
+func (c *Canvas) snapshotRequest(agent, request, role string, requestLimit int) (attempt, error) {
 	d := c.definition
 	declared, ok := d.Agents[agent]
-	if !ok || (!validRole(role) && role != fileActor) || strings.TrimSpace(request) == "" || !utf8.ValidString(request) || !safeText(request, 2000) {
+	if !ok || (!validRole(role) && role != fileActor) || strings.TrimSpace(request) == "" || !utf8.ValidString(request) || !safeText(request, requestLimit) {
 		return attempt{}, errors.New("invalid declared agent, actor or request")
 	}
 	base, err := c.space.Head()
@@ -237,6 +246,11 @@ func (c *Canvas) genericState(state State) (State, error) {
 }
 
 func (c *Canvas) WriteInput(filename, content, role string) error {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+	if err := c.competingFlow(); err != nil {
+		return err
+	}
 	if c.definition == nil || !validRole(role) || !c.definition.Policy.IsInput(filename) || !safeText(content, 64<<10) {
 		return errors.New("invalid declared input")
 	}
@@ -311,6 +325,11 @@ func (c *Canvas) readInput(filename string) ([]byte, error) {
 }
 
 func (c *Canvas) ScanInputs() error {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+	if err := c.competingFlow(); err != nil {
+		return err
+	}
 	if c.definition == nil {
 		return errors.New("generic definition required")
 	}
