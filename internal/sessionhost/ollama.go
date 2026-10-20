@@ -88,6 +88,9 @@ func compatible(e endpoint) (controller.ModelFunc, error) {
 		}
 		ctx = context.WithValue(ctx, responseFormatKey{}, req.Params["response_format"])
 		ctx = context.WithValue(ctx, maxTokensKey{}, req.Params["max_tokens"])
+		// The transport applies these journaled hints. Upstream rejects Params,
+		// so clear only this request value, never the shared parameter map.
+		req.Params = nil
 		return provider.Model(ctx, req)
 	}), nil
 }
@@ -131,9 +134,9 @@ func readKeyFile(label, path string) (string, error) {
 	return key, nil
 }
 
-// The upstream provider does not encode ModelRequest.Params, so the generation
-// limits are applied to the outgoing HTTP request here. The harness hashes the
-// same fixed Params on live runs and on replay.
+// Canvas applies recorded generation hints to the outgoing HTTP request here.
+// The upstream provider rejects Params; the harness still hashes the same fixed
+// Params on live runs and on replay.
 type responseFormatKey struct{}
 type maxTokensKey struct{}
 type boundedGenerationTransport struct {

@@ -191,9 +191,10 @@ Prerequisites for a future hosted qualification (not a runnable procedure):
 
 ## Dependency compatibility
 
-Both sessions and its Substrate integration remain pinned to the public fork
-commit `ce018b2daa0f` used by the host. Moving to upstream requires a separate
-provider-compatibility update. This affects all Canvas commands, not just tests. Opening an existing session journal migrates
+Both sessions and its Substrate integration are pinned to upstream commit
+`f18a2cb1454d`. The provider adapter applies recorded schema and generation hints
+at the HTTP boundary without changing the journaled request or its replay hashes.
+This affects all Canvas commands, not just tests. Opening an existing session journal migrates
 it to schema 5; the migration test checks that old event bytes/hashes and completed
 zero-call reconstruction remain unchanged. Back up state first; rollback to the
 old sessions binary against a migrated journal is not qualified. The existing
