@@ -15,11 +15,15 @@ import (
 	"github.com/agent-primitives/canvas/internal/sessionauth"
 	"github.com/agent-primitives/canvas/internal/sharedspace"
 	"github.com/agent-primitives/sessions/api"
+	v1 "github.com/agent-primitives/sessions/api/genpb"
 	"github.com/agent-primitives/sessions/client"
 )
 
 var ErrFlowConflict = errors.New("workflow state, binding or request conflicts; inspect before acting")
 var ErrFlowBusy = errors.New("a workflow owns this workspace; competing work is refused")
+
+// ErrFlowCancelPending distinguishes a persisted fence from a no-write refusal.
+var ErrFlowCancelPending = errors.New("cancellation fence persisted; native settlement remains pending")
 
 type FlowRuntimeOptions struct {
 	MaxAgentRuns    int
@@ -38,14 +42,23 @@ type FlowFeedback struct {
 	Actor          sharedspace.ReviewActor
 }
 type flowCommand struct {
-	Digest string `json:"digest"`
+	Digest  string `json:"digest"`
+	Pending bool   `json:"pending,omitempty"`
 }
 
 // Keep exact input bytes outside RawMessage: indented ledger encoding rewrites
 // RawMessage whitespace, but request-key equality and frozen inputs are byte-bound.
 type flowRunRecord struct {
 	FlowRun
-	InputBytes []byte `json:"inputBytes,omitempty"`
+	InputBytes      []byte                  `json:"inputBytes,omitempty"`
+	Reviews         []flowReviewIntent      `json:"reviews,omitempty"`
+	Generation      uint64                  `json:"generation,omitempty"`
+	Generations     []flowGeneration        `json:"generations,omitempty"`
+	CancelRequested bool                    `json:"cancelRequested,omitempty"`
+	CancelledBy     sharedspace.ReviewActor `json:"cancelledBy,omitzero"`
+	Revocation      uint64                  `json:"revocation,omitempty"`
+	ReadyHead       string                  `json:"readyHead,omitempty"`
+	ReconciledBy    sharedspace.ReviewActor `json:"reconciledBy,omitzero"`
 }
 
 // FlowRun is a detached snapshot, never mutable execution authority.
@@ -102,7 +115,7 @@ func (c *Canvas) activeFlowLocked() bool {
 
 // flowAdmissionBusyLocked shares the reservation mutex with all native work.
 func (c *Canvas) flowAdmissionBusyLocked() bool {
-	if c.activeFlowLocked() || c.ctx.Err() != nil {
+	if c.activeFlowLocked() || c.flowEffectBusyLocked("") || c.ctx.Err() != nil {
 		return true
 	}
 	for _, a := range c.data.Attempts {
@@ -125,7 +138,7 @@ func (c *Canvas) flowAdmissionBusyLocked() bool {
 func (c *Canvas) competingFlow() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.activeFlowLocked() {
+	if c.activeFlowLocked() || c.flowEffectBusyLocked("") {
 		return ErrFlowBusy
 	}
 	return nil
@@ -260,7 +273,7 @@ func (c *Canvas) StartFlow(ctx context.Context, r FlowStart) (FlowRun, error) {
 
 // dispatchFlowLocked is publicationMu-owned. It reserves the attempt and budget
 // in the same ledger write before starting the existing native worker.
-func (c *Canvas) dispatchFlowLocked(ctx context.Context, id string, trigger sharedspace.ReviewActor, review string) error {
+func (c *Canvas) dispatchFlowLocked(ctx context.Context, id string, trigger sharedspace.ReviewActor, review string, advanceKeys ...string) error {
 	c.mu.Lock()
 	f := cloneFlowRun(*c.flowLocked(id))
 	s, ok := c.flowStep(&f)
@@ -269,7 +282,7 @@ func (c *Canvas) dispatchFlowLocked(ctx context.Context, id string, trigger shar
 		return ErrFlowConflict
 	}
 	if s.Action != "" {
-		return c.parkFlowActionLocked(ctx, id, s.Action, trigger)
+		return c.parkFlowActionLocked(ctx, id, s.Action, trigger, advanceKeys...)
 	}
 	if f.Attempts >= f.AgentRuns {
 		return c.setFlow(id, "exhausted", "The selected attempt budget is exhausted.")
@@ -297,7 +310,7 @@ func (c *Canvas) dispatchFlowLocked(ctx context.Context, id string, trigger shar
 	a.FlowStage = "queued"
 	c.mu.Lock()
 	live := c.flowLocked(id)
-	if live == nil || terminalFlow(live.State) || live.State == "uncertain" {
+	if live == nil || terminalFlow(live.State) || live.State == "uncertain" || c.flowRecordLocked(id).CancelRequested || c.flowRecordLocked(id).Revocation != 0 || c.flowRecordLocked(id).Generation == ^uint64(0) {
 		c.mu.Unlock()
 		return ErrFlowConflict
 	}
@@ -306,6 +319,12 @@ func (c *Canvas) dispatchFlowLocked(ctx context.Context, id string, trigger shar
 		c.mu.Unlock()
 		return ErrFlowConflict
 	}
+	r := c.flowRecordLocked(id)
+	previous := r.Generation
+	r.Generation++
+	a.FlowGeneration = r.Generation
+	r.Generations = append(r.Generations, flowGeneration{Number: r.Generation, Previous: previous, Step: s.ID, Attempt: a.ID})
+	c.finishAdvanceReservationLocked(live, advanceKeys)
 	live.Attempts++
 	live.Step = s.ID
 	live.Attempt = a.ID
@@ -353,7 +372,7 @@ func (c *Canvas) observeFlowAttemptLocked(a *attempt) {
 		return
 	}
 	f := c.flowLocked(a.FlowRun)
-	if f == nil || f.Attempt != a.ID || f.State != "running" {
+	if f == nil || f.State != "running" || !c.flowGenerationCurrentLocked(f, a) {
 		return
 	}
 	if a.Status == "proposed" && a.Proposal != "" {
@@ -371,7 +390,7 @@ func (c *Canvas) flowPublishAllowed(a attempt) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	f := c.flowLocked(a.FlowRun)
-	if f == nil || f.State != "running" || f.Attempt != a.ID || f.Step != a.FlowStep {
+	if f == nil || f.State != "running" || !c.flowGenerationCurrentLocked(f, &a) || f.Step != a.FlowStep {
 		return false
 	}
 	s, ok := c.flowStep(f)
@@ -405,7 +424,7 @@ func (c *Canvas) flowReviewGuard(id, role string) (string, error) {
 		return "", nil
 	}
 	f := c.flowLocked(a.FlowRun)
-	if f == nil || f.State != "review" || f.Attempt != a.ID || f.Proposal != id || p == nil || p.Status != "pending" {
+	if f == nil || f.State != "review" || !c.flowGenerationCurrentLocked(f, a) || f.Proposal != id || p == nil || p.Status != "pending" {
 		return "", ErrFlowConflict
 	}
 	s, ok := c.flowStep(f)
@@ -430,6 +449,16 @@ func (c *Canvas) beginFlowDecision(id, proposal, action string, who sharedspace.
 	}
 	f.State = "decision"
 	f.Reason = action + " intent pending for " + proposal
+	record := c.flowRecordLocked(id)
+	intent := flowReviewIntent{Generation: record.Generation, Definition: f.Definition, Flow: f.Flow, Step: f.Step, Attempt: f.Attempt, Proposal: proposal, Base: c.findLocked(f.Attempt).Base, Action: action, Reviewer: who, RequestKey: key, Digest: digest, Feedback: feedback}
+	// Reconciliation may restore a genuinely undecided proposal after a store
+	// refusal. Replace its uncommitted intent, never a committed decision.
+	n := len(record.Reviews)
+	if n > 0 && record.Reviews[n-1].Attempt == f.Attempt && !record.Reviews[n-1].Applied {
+		record.Reviews[n-1] = intent
+	} else {
+		record.Reviews = append(record.Reviews, intent)
+	}
 	if key != "" {
 		f.Commands[key] = flowCommand{Digest: digest}
 	}
@@ -474,12 +503,19 @@ func (c *Canvas) reviewFlowLocked(ctx context.Context, id, action, role string, 
 		}
 		return p, err
 	}
-	if action == "reject" && change == nil {
-		err = c.setFlow(fid, "rejected", "Human rejected the current proposal.")
-		return p, err
-	}
 	c.mu.Lock()
 	f := c.flowLocked(fid)
+	c.markReviewAppliedLocked(fid, p)
+	if action == "reject" && change == nil {
+		f.State = "rejected"
+		f.Reason = "Human rejected the current proposal."
+		err = c.saveLocked()
+		if err != nil {
+			f.State = "uncertain"
+		}
+		c.mu.Unlock()
+		return p, err
+	}
 	if action == "accept" {
 		for name, doc := range c.definition.documents {
 			if _, ok := p.Changes[doc.path]; ok {
@@ -600,49 +636,68 @@ func (c *Canvas) flowRequester(f FlowRun, who sharedspace.ReviewActor, role stri
 func (c *Canvas) CancelFlow(ctx context.Context, r FlowCancel) (FlowRun, error) {
 	c.publicationMu.Lock()
 	defer c.publicationMu.Unlock()
-	_, who, err := c.requester(ctx, r.Role)
+	f, err := c.GetFlow(ctx, r.Run)
 	if err != nil {
-		return FlowRun{}, err
+		return f, err
+	}
+	// Parked actions cannot be cancelled at the qualified native pin. Refuse
+	// before recording a fence, including action creation/Continue uncertainty.
+	if f.Action != "" || terminalFlow(f.State) {
+		return f, ErrFlowConflict
+	}
+	who, err := c.authorizeFlowMaintenance(ctx, f, r.Role, "cancel")
+	if err != nil {
+		return f, err
 	}
 	c.mu.Lock()
-	live := c.flowLocked(r.Run)
-	if live == nil {
-		c.mu.Unlock()
-		return FlowRun{}, errNotFound
-	}
-	f := cloneFlowRun(*live)
 	a := c.findLocked(f.Attempt)
-	safe := f.State == "review" || f.State == "paused" && (a != nil && (a.FlowStage == "completed" || a.FlowStage == "queued") || f.Attempts == 0 && f.Attempt == "")
+	var target attempt
+	if a != nil {
+		target = *a
+	}
+	safe := f.State == "review" || f.State == "ready" || f.State == "paused" && (a != nil && (a.FlowStage == "completed" || a.FlowStage == "queued") || f.Attempts == 0 && f.Attempt == "")
+	rec := c.flowRecordLocked(f.ID)
+	if rec.CancelRequested {
+		c.mu.Unlock()
+		return f, ErrFlowCancelPending
+	}
+	if c.flowEffectBusyLocked(f.ID) || rec.Revocation == ^uint64(0) {
+		c.mu.Unlock()
+		return f, ErrFlowConflict
+	}
+	rec.CancelRequested = true
+	rec.CancelledBy = who
+	rec.Revocation++
+	live := c.flowLocked(f.ID)
+	live.State = "cancelling"
+	live.Reason = "Cancellation requested; native settlement is not yet known."
+	if safe {
+		live.State = "cancelled"
+		live.Reason = "Canceled at a quiescent boundary; accepted history retained."
+	}
+	err = c.saveLocked()
+	if err != nil {
+		live.State = "uncertain"
+		c.persistenceFailureLocked(nil)
+	}
 	c.mu.Unlock()
-	if !safe {
-		return FlowRun{}, ErrFlowConflict
+	out, _ := c.GetFlow(context.Background(), f.ID)
+	if err != nil || safe {
+		return out, err
 	}
-	allowed := c.flowRequester(f, who, r.Role)
-	if !allowed && r.Role == "owner" {
-		if !c.authenticated {
-			allowed = true
-		} else if c.flowOptions.OwnerAuthorizer != nil {
-			id, _ := sessionauth.Caller(ctx)
-			var paths []string
-			for _, flow := range c.definition.flows {
-				for _, step := range flow.definition.Steps {
-					if step.Gate != nil {
-						for _, name := range step.Gate.Accept {
-							paths = append(paths, c.definition.documents[name].path)
-						}
-					}
-				}
-			}
-			slices.Sort(paths)
-			paths = slices.Compact(paths)
-			allowed = c.flowOptions.OwnerAuthorizer.AuthorizeReview(ctx, ReviewAuthorization{Reviewer: id, Role: "owner", Proposal: f.Proposal, Action: "cancel", Paths: paths}) == nil
-		}
+	if target.Session == "" || target.ExpectedSeq == nil {
+		return out, ErrFlowCancelPending
 	}
-	if !allowed {
-		return FlowRun{}, errDocumentReviewDenied
+	n, err := c.readFlowExecution(ctx, target)
+	if err != nil {
+		return out, err
 	}
-	err = c.setFlow(r.Run, "cancelled", "Canceled at a quiescent gate; accepted history retained.")
-	out, _ := c.GetFlow(context.Background(), r.Run)
+	service, sessions, release, err := c.serviceContext(ctx)
+	if err != nil {
+		return out, err
+	}
+	defer release()
+	_, err = sessions.Sessions().Cancel(service, &v1.CancelRequest{Session: target.Session, ExecutionId: n.Execution, Reason: "Canvas flow cancellation requested"})
 	return out, err
 }
 
@@ -650,16 +705,27 @@ func (c *Canvas) CancelFlow(ctx context.Context, r FlowCancel) (FlowRun, error) 
 func (c *Canvas) reopenFlowsLocked() {
 	for i := range c.data.Flows {
 		f := &c.data.Flows[i]
+		if f.Commands == nil {
+			f.Commands = map[string]flowCommand{}
+		}
+		if f.Accepted == nil {
+			f.Accepted = map[string]string{}
+		}
 		if f.InputBytes != nil {
 			f.Inputs = bytes.Clone(f.InputBytes)
 		}
 		if !terminalFlow(f.State) {
+			if f.CancelRequested {
+				f.State = "cancelling"
+				f.Reason = "Cancellation fence retained after reopen; explicit settlement required."
+				continue
+			}
 			f.State = "uncertain"
 			f.Reason = "Workflow reopened; explicit reconciliation is required before further dispatch."
 		}
 	}
 }
-func (c *Canvas) parkFlowActionLocked(ctx context.Context, id, action string, trigger sharedspace.ReviewActor) error {
+func (c *Canvas) parkFlowActionLocked(ctx context.Context, id, action string, trigger sharedspace.ReviewActor, advanceKeys ...string) error {
 	c.mu.Lock()
 	f := c.flowLocked(id)
 	doc := c.definition.actions[action].Document
@@ -672,7 +738,7 @@ func (c *Canvas) parkFlowActionLocked(ctx context.Context, id, action string, tr
 	if proposal == "" {
 		return c.setFlow(id, "uncertain", "No flow-accepted action document is bound.")
 	}
-	_, err := c.requestAnnouncementLocked(ctx, action, proposal, role, id)
+	_, err := c.requestAnnouncementLocked(ctx, action, proposal, role, id, advanceKeys...)
 	if err != nil {
 		_ = c.setFlow(id, "uncertain", "Terminal action outcome is uncertain; inspect before acting.")
 	}
@@ -683,7 +749,11 @@ func (c *Canvas) flowActionAllowedLocked(op announcementOperation) bool {
 		return !c.activeFlowLocked()
 	}
 	f := c.flowLocked(op.FlowRun)
-	return f != nil && f.Action == op.Snapshot.Operation && (f.State == "action" || f.State == "approved-not-executed") && f.Accepted[op.Snapshot.Document] == op.Snapshot.Proposal
+	if f == nil {
+		return false
+	}
+	r := c.flowRecordLocked(f.ID)
+	return r.Generation != 0 && op.FlowGeneration == r.Generation && !op.Revoked && !r.CancelRequested && r.Revocation == 0 && !op.EffectReserved && op.Stage != "pending" && op.Stage != "uncertain" && f.Action == op.Snapshot.Operation && (f.State == "action" || f.State == "approved-not-executed") && f.Accepted[op.Snapshot.Document] == op.Snapshot.Proposal
 }
 func (c *Canvas) observeFlowActionLocked(op announcementOperation) {
 	if op.FlowRun == "" {
@@ -696,6 +766,11 @@ func (c *Canvas) observeFlowActionLocked(op announcementOperation) {
 	// A saved decision is only intent until the human RPC succeeds. Keep it
 	// nonterminal across that window, including rejection and restart.
 	if op.Stage == "pending" {
+		return
+	}
+	if op.EffectReserved && !op.EffectSettled {
+		f.State = "uncertain"
+		f.Reason = "Effect dispatch reserved; explicit native settlement evidence required."
 		return
 	}
 	if op.Stage == "uncertain" {
@@ -719,7 +794,11 @@ func (c *Canvas) observeFlowActionLocked(op announcementOperation) {
 // A known denial may be concluded explicitly, never recovered or re-executed.
 func (c *Canvas) flowDeniedCleanupLocked(op announcementOperation) bool {
 	f := c.flowLocked(op.FlowRun)
-	return f != nil && f.State == "denied" && f.Action == op.Snapshot.Operation && op.Decision != nil && !op.Decision.Approved && !c.activeFlowLocked()
+	if f == nil {
+		return false
+	}
+	r := c.flowRecordLocked(f.ID)
+	return r.Generation != 0 && op.FlowGeneration == r.Generation && !op.Revoked && !r.CancelRequested && r.Revocation == 0 && f.State == "denied" && f.Action == op.Snapshot.Operation && op.Decision != nil && !op.Decision.Approved && !c.activeFlowLocked()
 }
 
 // Used after explicit human Continue, while publicationMu is still held.
@@ -737,8 +816,27 @@ func (c *Canvas) finishFlowAction(ctx context.Context, op announcementOperation)
 		}
 		return errors.Join(err, c.setFlow(op.FlowRun, "uncertain", "Continue dispatched but its native outcome could not be established."))
 	}
+	if v.Receipt == nil && (v.Status != "denied" || op.Decision == nil || op.Decision.Approved) {
+		return errors.Join(ErrFlowConflict, c.setFlow(op.FlowRun, "uncertain", "Native action concluded without a qualified receipt or denial."))
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i := range c.data.Announcements {
+		if c.data.Announcements[i].Snapshot.Operation == op.Snapshot.Operation {
+			c.data.Announcements[i].EffectSettled = true
+		}
+	}
+	f := c.flowLocked(op.FlowRun)
 	if v.Receipt != nil {
-		return c.setFlow(op.FlowRun, "complete", "")
+		f.State = "complete"
+	} else {
+		f.State = "denied"
+	}
+	f.Reason = ""
+	if err := c.saveLocked(); err != nil {
+		f.State = "uncertain"
+		c.persistenceFailureLocked(nil)
+		return err
 	}
 	return nil
 }

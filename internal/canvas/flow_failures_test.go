@@ -46,7 +46,7 @@ func TestWorkflowRunningCancellationAndDuplicateStartAreFenced(t *testing.T) {
 	f := startWorkflow(t, c, "running", 12)
 	<-entered
 	if _, err := c.CancelFlow(context.Background(), FlowCancel{Run: f.ID, Role: "owner"}); err == nil {
-		t.Error("running cancellation implied revocation")
+		t.Error("unqualified native cancellation claimed success")
 	}
 	if _, err := c.RetryFlow(context.Background(), FlowRetry{Run: f.ID, Attempt: f.Attempt, RequestKey: "too-soon", Role: "GM"}); err == nil {
 		t.Error("live generation was retried")
@@ -55,7 +55,12 @@ func TestWorkflowRunningCancellationAndDuplicateStartAreFenced(t *testing.T) {
 		t.Error("running Run key duplicated")
 	}
 	close(release)
-	f = waitWorkflow(t, c, f.ID, "review")
+	c.wg.Wait()
+	var err error
+	f, err = c.ReconcileFlow(context.Background(), FlowMaintenance{Run: f.ID, Role: "GM"})
+	if err != nil || f.State != "cancelled" {
+		t.Fatal("running cancellation did not settle without late review", f, err)
+	}
 	if calls.Load() != 1 {
 		t.Fatal("running commands dispatched another model", calls.Load())
 	}
