@@ -5,7 +5,7 @@ CONTAINER_ENGINE ?= auto
 # Python 3.10+. Point at a venv to use its packages, e.g. PYTHON=.venv/bin/python.
 PYTHON ?= python3
 
-.PHONY: setup setup-offline dev run northwind test fmt-check browser-smoke build check-model check-offline-model remove-ollama
+.PHONY: setup setup-offline dev run northwind test test-go test-canvas fmt-check browser-smoke build check-model check-offline-model remove-ollama
 setup:
 	go mod download
 setup-offline: setup
@@ -18,13 +18,20 @@ run:
 northwind:
 	go run ./cmd/canvas -definition examples/northwind-prd/canvas.yaml -state .state/northwind -listen 127.0.0.1:$(HTTP_PORT) -model-base http://127.0.0.1:$(MODEL_PORT) $(if $(MODEL_PROFILE),-model-profile "$(MODEL_PROFILE)")
 # CI runs these same targets.
-test: fmt-check
-	go test -race ./...
+test: fmt-check test-go
 	go vet ./...
 	node --check web/app.js
 	@for file in .github/extensions/northwind-review/*.js .github/extensions/northwind-review/*.mjs; do node --check "$$file" || exit 1; done
 	node --test scripts/*.test.cjs
 	PYTHONDONTWRITEBYTECODE=1 $(PYTHON) -m unittest discover -s scripts -p '*_test.py'
+# Each shard keeps serial fixture isolation and the normal 600s package limit.
+# The runner owns cancellation and waits for every shard; logs are retained.
+test-canvas:
+	$(PYTHON) scripts/canvas-tests.py --all --shards 4
+test-go: test-canvas
+	@packages=$$(go list ./...) || exit $$?; \
+	packages=$$(printf '%s\n' "$$packages" | grep -vx 'github.com/agent-primitives/canvas/internal/canvas') || exit $$?; \
+	go test -race $$packages
 # Skips hidden directories so local worktrees and caches aren't checked.
 fmt-check:
 	@files=$$(find . -path '*/.*' -prune -o -name '*.go' -print); \
