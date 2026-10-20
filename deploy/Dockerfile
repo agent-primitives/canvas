@@ -10,7 +10,8 @@ COPY web ./web
 RUN CGO_ENABLED=0 go build -trimpath -o /out/canvas ./cmd/canvas && \
     CGO_ENABLED=0 go build -trimpath -o /out/sessions-host ./cmd/sessions-host && \
     CGO_ENABLED=0 go build -trimpath -o /out/bundle-harness ./cmd/bundle-harness && \
-    CGO_ENABLED=0 go build -trimpath -o /out/canvas-harness ./cmd/canvas-harness
+    CGO_ENABLED=0 go build -trimpath -o /out/canvas-harness ./cmd/canvas-harness && \
+    CGO_ENABLED=0 go build -trimpath -o /out/canvas-engine ./cmd/canvas-engine
 
 FROM alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0 AS producer
 RUN adduser -D -u 65532 canvas
@@ -18,6 +19,14 @@ WORKDIR /data
 COPY --from=build /out/canvas-harness /usr/local/bin/
 USER 65532:65532
 ENTRYPOINT ["canvas-harness"]
+
+FROM alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0 AS engine
+RUN apk add --no-cache git ca-certificates && adduser -D -u 65532 canvas
+WORKDIR /data
+ENV HOME=/data/home TMPDIR=/data/tmp
+COPY --from=build /out/canvas-engine /usr/local/bin/
+USER 65532:65532
+ENTRYPOINT ["canvas-engine"]
 
 FROM alpine:3.23@sha256:85fe1e81d6758c208f3e1eed4338a1997e19d4be002d4dd32d3100c9a8c010a0 AS app
 RUN apk add --no-cache git curl ca-certificates && adduser -D -u 65532 canvas

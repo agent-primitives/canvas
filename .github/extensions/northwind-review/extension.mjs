@@ -16,7 +16,7 @@ await joinSession({ canvases: [createCanvas({
       instances.set(ctx.instanceId, bridge);
       return { title: 'Northwind review', status: 'Provider mode and identity are shown in the review panel.', url: bridge.url };
     } catch {
-      throw new CanvasError('engine_unavailable', 'Start the separate local copilot-review command on 127.0.0.1:18878, then reopen this canvas.');
+      throw new CanvasError('engine_unavailable', 'Start the separate Canvas engine and check CANVAS_ENGINE_CONFIG when configured (HTTPS loopback URL and CA file). Otherwise start local copilot-review on 127.0.0.1:18878. Reopen this canvas.');
     }
   },
   onClose: async ctx => {

@@ -93,6 +93,7 @@ type ledger struct {
 	// service-owned attempt is journaled; rotation requires new state.
 	ExecutionOwner   api.IdentityRef         `json:"executionOwner,omitzero"`
 	DefinitionDigest string                  `json:"definitionDigest,omitempty"`
+	SessionProject   string                  `json:"sessionProject,omitempty"`
 	Attempts         []attempt               `json:"attempts"`
 	Reports          map[string]string       `json:"reports"`
 	Role             string                  `json:"role"`

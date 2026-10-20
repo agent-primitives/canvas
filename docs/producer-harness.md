@@ -114,6 +114,17 @@ private file modes to make a mount work. The image contains the binary, not your
 scenario or credentials. Image/cluster lifecycle qualification is separate from
 the command's fake-harnesswire tests.
 
+## Standalone hosted TLS engine
+
+For a separate non-root, headless TLS engine connected to an existing private
+Sessions host, see [the hosted engine operator guide](hosted-engine.md). The
+`engine` image / `canvas-engine -config FILE` path requires explicit trusted-network
+auth-off configuration, prepared local definition/layouts, a private instance-bound
+state child and explicit CA/hostname verification. It has no embedded host or
+provider credentials. Identity and remote announcement/replay are not exercised;
+remote model/executor counters stay unknown. This does not change the local mode
+below.
+
 ## Separate unauthenticated trusted-loopback connection
 
 For a trusted single-operator port-forward/private development connection:
