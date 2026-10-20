@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -141,8 +142,19 @@ func TestLocalNorthwindDocumentAndActionLoop(t *testing.T) {
 }
 
 func TestRefuseNonLoopbackBeforeCreatingState(t *testing.T) {
-	if d, err := start(filepath.Join("..", ".."), filepath.Join(t.TempDir(), "unused"), "0.0.0.0:18878"); err == nil {
-		d.Close()
-		t.Fatal("wildcard listen accepted")
+	for _, address := range []string{"0.0.0.0:0", "192.0.2.10:0", "169.254.169.254:0", "localhost:0", "[::]:0", "[::1]:0", "127.0.0.2:0"} {
+		t.Run(address, func(t *testing.T) {
+			state := filepath.Join(t.TempDir(), "unused")
+			d, err := start(filepath.Join("..", ".."), state, address)
+			if d != nil {
+				d.Close()
+			}
+			if err == nil {
+				t.Fatal("non-literal-loopback listener accepted")
+			}
+			if _, err := os.Lstat(state); !os.IsNotExist(err) {
+				t.Fatal("refused listener created state")
+			}
+		})
 	}
 }
