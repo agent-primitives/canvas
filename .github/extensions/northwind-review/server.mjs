@@ -1,6 +1,9 @@
 import { createServer } from 'node:http';
+import { Agent, request } from 'node:https';
+import { isAbsolute } from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { open, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
 
 const routes = {
   GET: new Set(['/api/state', '/api/document', '/api/announcement', '/api/demo', '/api/forks', '/api/flows', '/api/flow']),
@@ -12,27 +15,88 @@ const security = {
   'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'",
 };
 
-// The capability protects this local prototype's iframe transport, not human authority.
-export async function startBridge({ engineURL = 'http://127.0.0.1:18878' } = {}) {
-  const engine = new URL(engineURL);
-  if (engine.protocol !== 'http:' || engine.hostname !== '127.0.0.1' || !engine.port || engine.username || engine.password || engine.pathname !== '/' || engine.search || engine.hash) {
-    throw new Error('A literal loopback engine URL is required');
+async function readRegular(filePath, limit, label) {
+  // An ordinary read-only open can wait for a FIFO writer before fstat runs.
+  const file = await open(filePath, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    if (!(await file.stat()).isFile()) throw new Error(`${label} must be a regular file`);
+    const buffer = Buffer.alloc(limit + 1);
+    let size = 0, count;
+    while (size < buffer.length && (count = (await file.read(buffer, size, buffer.length - size, null)).bytesRead)) size += count;
+    if (size > limit) throw new Error(`${label} exceeds ${limit} bytes`);
+    return buffer.subarray(0, size);
+  } finally { await file.close(); }
+}
+
+async function connectionOptions(options) {
+  const explicit = Object.hasOwn(options, 'engineURL') || Object.hasOwn(options, 'caFile');
+  const configFile = process.env.CANVAS_ENGINE_CONFIG;
+  if (configFile && explicit) throw new Error('Engine config conflicts with explicit connection options');
+  if (configFile) {
+    const bytes = (await readRegular(configFile, 65536, 'Engine config')).toString('utf8');
+    const data = JSON.parse(bytes);
+    // JSON.parse accepts duplicate members; reject those as ambiguous operator input.
+    const tokens = bytes.match(/"(?:\\.|[^"\\])*"|[{}[\]:,]|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/g) || [];
+    const keys = tokens.filter((token, i) => tokens[i + 1] === ':').map(token => JSON.parse(token));
+    if (!data || Array.isArray(data) || typeof data !== 'object' || keys.length !== 3 || new Set(keys).size !== 3 || keys.some(key => !['version', 'engineURL', 'caFile'].includes(key)) || data.version !== 1) throw new Error('Engine config requires only version 1, engineURL and caFile');
+    options = data;
   }
-  const upstream = (path, options = {}) => fetch(new URL(path, engine), { ...options, redirect: 'error', signal: AbortSignal.timeout(10000) });
+  const engineURL = Object.hasOwn(options, 'engineURL') ? options.engineURL : 'http://127.0.0.1:18878';
+  const match = typeof engineURL === 'string' && /^(https?):\/\/127\.0\.0\.1:([1-9]\d{0,4})\/?$/.exec(engineURL);
+  if (!match || Number(match[2]) > 65535) throw new Error('A literal loopback engine URL is required');
+  const secure = match[1] === 'https';
+  if (secure ? typeof options.caFile !== 'string' || !isAbsolute(options.caFile) : Object.hasOwn(options, 'caFile')) throw new Error('A literal loopback engine URL over HTTPS requires an absolute CA file; HTTP forbids CA configuration');
+  return { engine: new URL(engineURL), ca: secure ? await readRegular(options.caFile, 1 << 20, 'Engine CA') : undefined };
+}
+
+// Deliberately separate from globalAgent/fetch: only the selected CA and direct TLS
+// apply, even when Node was started with extra roots, TLS-disable or env proxies.
+function tlsUpstream(url, ca, options) {
+  const agent = new Agent({ ca, rejectUnauthorized: true, minVersion: 'TLSv1.2', proxyEnv: {}, keepAlive: false });
+  return new Promise((resolve, reject) => {
+    const req = request(url, { ...options, agent, ca, rejectUnauthorized: true, signal: AbortSignal.timeout(10000) }, res => {
+      res.on('error', reject);
+      res.once('close', () => agent.destroy());
+      if (res.statusCode >= 300 && res.statusCode < 400) { res.destroy(new Error('Engine redirects are not supported')); return; }
+      if (url.pathname !== '/' && !/^application\/json(?:\s*;|$)/i.test(res.headers['content-type'] || '')) { res.destroy(new Error('Engine JSON response required')); return; }
+      const parts = []; let size = 0;
+      res.on('data', chunk => {
+        size += chunk.length;
+        if (size > 4 * 1024 * 1024) res.destroy(new Error('Engine view exceeds local bound'));
+        else parts.push(chunk);
+      });
+      res.on('end', () => {
+        const bytes = Buffer.concat(parts);
+        resolve({ ok: res.statusCode >= 200 && res.statusCode < 300, status: res.statusCode,
+          headers: { getSetCookie: () => res.headers['set-cookie'] || [], get: name => res.headers[name.toLowerCase()] },
+          body: [bytes], json: async () => JSON.parse(bytes.toString('utf8')) });
+      });
+    });
+    req.once('error', error => { agent.destroy(); reject(error); });
+    req.end(options.body);
+  });
+}
+
+// The capability protects this local prototype's iframe transport, not human authority.
+export async function startBridge(options = {}) {
+  const { engine, ca } = await connectionOptions(options);
+  const upstream = (path, options = {}) => ca !== undefined
+    ? tlsUpstream(new URL(path, engine), ca, options)
+    : fetch(new URL(path, engine), { ...options, redirect: 'error', signal: AbortSignal.timeout(10000) });
   async function demoInfo() {
     const response = await upstream('/api/demo');
-    if (!response.ok) throw new Error('Start the Canvas review engine first');
+    if (!response.ok) throw new Error('Start the configured Canvas review engine first');
     const data = await response.json();
-    if (!['deterministic-northwind', 'authenticated-sessions', 'trusted-loopback-sessions', 'hosted-model', 'offline-model'].includes(data.mode) || (data.mode === 'deterministic-northwind' && data.realModelCalls !== 0) || typeof data.boot !== 'string' || !data.boot || data.boot.length > 128) throw new Error('Supported Canvas review engine required');
+    if (!['deterministic-northwind', 'authenticated-sessions', 'trusted-loopback-sessions', 'hosted-sessions', 'hosted-model', 'offline-model'].includes(data.mode) || (data.mode === 'deterministic-northwind' && data.realModelCalls !== 0) || typeof data.boot !== 'string' || !data.boot || data.boot.length > 128) throw new Error('Supported Canvas review engine required');
     return data;
   }
   const initialDemo = await demoInfo();
   const boot = initialDemo.boot;
   const headlessPrefix = initialDemo.headlessPrefix || '';
-  if (!['', '/engine'].includes(headlessPrefix)) throw new Error('Unsupported engine API prefix');
+  if (!['', '/engine'].includes(headlessPrefix) || (initialDemo.mode === 'hosted-sessions' && headlessPrefix !== '/engine')) throw new Error('Unsupported engine API prefix');
   const bootstrap = await upstream('/');
   const cookie = bootstrap.headers.getSetCookie().find(value => value.startsWith('canvas-local='))?.split(';')[0];
-  await bootstrap.body?.cancel();
+  await bootstrap.body?.cancel?.();
   if (!bootstrap.ok || !cookie) throw new Error('Engine browser boundary unavailable');
   const token = randomBytes(32).toString('hex');
   let origin;
@@ -59,6 +123,7 @@ export async function startBridge({ engineURL = 'http://127.0.0.1:18878' } = {})
       body = Buffer.concat(parts);
     }
     if ((await demoInfo()).boot !== boot) return reply(res, 409, { error: 'Engine restarted. Reopen the canvas; nothing was retried.', recovery: 'reopen' });
+    if (initialDemo.mode === 'hosted-sessions' && req.method === 'POST' && (url.pathname === '/api/verify' || url.pathname.startsWith('/api/announcement/'))) return reply(res, 409, { error: 'Hosted announcements and replay are unavailable. Identity not exercised; nothing was executed.' });
     // Engine credentials never enter the iframe; engine CSRF checks remain unchanged.
     const upstreamPath = (url.pathname === '/api/demo' ? '' : headlessPrefix) + url.pathname + url.search;
     const response = await upstream(upstreamPath, { method: req.method, body, headers: { Cookie: cookie, Origin: engine.origin, 'Content-Type': 'application/json' } });

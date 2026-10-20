@@ -42,6 +42,21 @@ func OpenDefined(root string, space sharedspace.SharedSpace, cl *client.Client, 
 	}
 	return openDefined(root, space, cl, address, definition, binder, archives...)
 }
+
+// OpenDefinedInstance binds private state and Sessions projects to one explicit
+// instance without changing the source definition's identity or digest.
+func OpenDefinedInstance(root string, space sharedspace.SharedSpace, cl *client.Client, address string, definition *CompiledDefinition, instanceID string, binder contract.ContractBinder, archives ...*contract.ArchiveResolver) (*Canvas, error) {
+	if !definitionName.MatchString(instanceID) {
+		return nil, errors.New("invalid canvas instance project")
+	}
+	if definition == nil {
+		return nil, errDefinition
+	}
+	d := *definition
+	d.runtimeProject = instanceID
+	return OpenDefined(root, space, cl, address, &d, binder, archives...)
+}
+
 func openDefined(root string, space sharedspace.SharedSpace, cl *client.Client, address string, definition *CompiledDefinition, binder contract.ContractBinder, archives ...*contract.ArchiveResolver) (*Canvas, error) {
 	if definition == nil || definition.Digest == "" || !definitionName.MatchString(definition.ID) || len(definition.documents) == 0 {
 		return nil, errors.New("compiled generic definition required")
@@ -81,7 +96,12 @@ func openDefined(root string, space sharedspace.SharedSpace, cl *client.Client, 
 	return openCanvas(root, space, cl, address, d.Bundles, binder, d.Triggers, &d)
 }
 
-func (c *Canvas) project() string { return c.definition.ID }
+func (c *Canvas) project() string {
+	if c.definition.runtimeProject != "" {
+		return c.definition.runtimeProject
+	}
+	return c.definition.ID
+}
 
 func (c *Canvas) recordedAgent(id string) bool {
 	_, ok := c.bundles[id]
@@ -96,7 +116,11 @@ func (c *Canvas) bindDefinition(existing bool) error {
 	if existing && c.data.DefinitionDigest != c.definition.Digest {
 		return errors.New("canvas definition changed; use separate state")
 	}
+	if existing && c.data.SessionProject != c.definition.runtimeProject {
+		return errors.New("canvas session project changed; use separate state")
+	}
 	c.data.DefinitionDigest = c.definition.Digest
+	c.data.SessionProject = c.definition.runtimeProject
 	if !existing {
 		// Seeded files are starting context, not newly arrived producer events.
 		// Subsequent changes and genuinely new files still get durable run intents.

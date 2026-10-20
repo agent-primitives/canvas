@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
+	"strconv"
 
 	"github.com/agent-primitives/canvas/internal/sharedspace"
 )
@@ -254,6 +256,30 @@ func AssetHandler(assets fs.FS) http.Handler {
 // boundary once to a composed endpoint. The cookie is local CSRF protection,
 // not authentication or a multi-user identity. Do not nest guarded handlers.
 func LocalHandler(host string, next http.Handler) http.Handler {
+	return browserGuard(host, "http://"+host, false, next)
+}
+
+// TLSLoopbackHandler guards an explicitly configured HTTPS loopback browser
+// origin, independently of the server's listen port. The caller serves TLS;
+// forwarded headers never supply trust. This is CSRF protection, not identity.
+func TLSLoopbackHandler(origin string, next http.Handler) (http.Handler, error) {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "https" || u.Hostname() != "127.0.0.1" {
+		return nil, errors.New("canonical HTTPS loopback origin required")
+	}
+	port, err := strconv.Atoi(u.Port())
+	if err != nil || port < 1 || port > 65535 || origin != "https://127.0.0.1:"+strconv.Itoa(port) {
+		return nil, errors.New("canonical HTTPS loopback origin required")
+	}
+	if port == 443 {
+		// Browsers and WHATWG URL serialize the default HTTPS port without :443.
+		u.Host = "127.0.0.1"
+		origin = u.String()
+	}
+	return browserGuard(u.Host, origin, true, next), nil
+}
+
+func browserGuard(host, origin string, secure bool, next http.Handler) http.Handler {
 	token := ID() + ID()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
@@ -261,17 +287,17 @@ func LocalHandler(host string, next http.Handler) http.Handler {
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Cache-Control", "no-store")
 		if r.Host != host || r.Header.Get("Sec-Fetch-Site") == "cross-site" {
-			http.Error(w, "Local canvas host required.", 403)
+			http.Error(w, "Local canvas host required.", http.StatusForbidden)
 			return
 		}
 		if r.Method != "GET" && r.Method != "HEAD" {
 			cookie, err := r.Cookie("canvas-local")
-			if err != nil || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(token)) != 1 || r.Header.Get("Origin") != "http://"+host {
-				http.Error(w, "Same-origin canvas action required.", 403)
+			if err != nil || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(token)) != 1 || r.Header.Get("Origin") != origin {
+				http.Error(w, "Same-origin canvas action required.", http.StatusForbidden)
 				return
 			}
 		} else {
-			http.SetCookie(w, &http.Cookie{Name: "canvas-local", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+			http.SetCookie(w, &http.Cookie{Name: "canvas-local", Value: token, Path: "/", HttpOnly: true, Secure: secure, SameSite: http.SameSiteStrictMode})
 		}
 		next.ServeHTTP(w, r)
 	})
