@@ -137,7 +137,7 @@ test('closed config and explicit options reject unsafe/mixed selections without 
   t.after(() => { if (saved === undefined) delete process.env.CANVAS_ENGINE_CONFIG; else process.env.CANVAS_ENGINE_CONFIG = saved; });
   process.env.CANVAS_ENGINE_CONFIG = config;
   const valid = { version: 1, engineURL: engine.engineURL, caFile: trusted.caFile };
-  for (const value of ['null', '[]', '{}', '{bad', JSON.stringify({ ...valid, version: 2 }), JSON.stringify({ ...valid, unknown: true }), JSON.stringify({ ...valid, caFile: null }), JSON.stringify({ ...valid, engineURL: 'http://127.0.0.1:18878' }), JSON.stringify({ ...valid, version: '1' }), JSON.stringify(valid).replace('{', '{"version":1,'), ' '.repeat(65537)]) {
+  for (const value of ['null', '[]', '{}', '{bad', JSON.stringify({ ...valid, version: 2 }), JSON.stringify({ ...valid, unknown: true }), JSON.stringify({ ...valid, caFile: null }), JSON.stringify({ ...valid, engineURL: 'http://127.0.0.1:18878' }), JSON.stringify({ ...valid, version: '1' }), '{"version":1,' + JSON.stringify(valid).slice(1), ' '.repeat(65537)]) {
     fs.writeFileSync(config, value); await assert.rejects(startBridge());
   }
   fs.writeFileSync(config, JSON.stringify(valid));
