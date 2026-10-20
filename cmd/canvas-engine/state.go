@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 )
@@ -20,6 +21,17 @@ type hostingRecord struct {
 }
 
 var errHosting = errors.New("private hosted state is invalid or incompatible; use separate prepared state, never reset/adopt existing history")
+
+// Only bounded, private staging files in the nonce format we generate are
+// disposable. A broad prefix rule could hide unmarked operator/history data.
+func hostingScratch(entry fs.DirEntry) bool {
+	nonce, ok := strings.CutPrefix(entry.Name(), ".hosting-")
+	if !ok || len(nonce) < 26 || len(nonce) > 128 || strings.Trim(nonce, "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567") != "" || !entry.Type().IsRegular() {
+		return false
+	}
+	info, err := entry.Info()
+	return err == nil && info.Mode() == 0600 && info.Size() <= 4096
+}
 
 // This read-only check precedes connections, locks and all state creation. A
 // matching marker with no ledgers is a recoverable partial initialization.
@@ -51,7 +63,7 @@ func preflightState(root string, want hostingRecord) error {
 			return errHosting
 		}
 		for _, entry := range entries {
-			if entry.Name() != ".producer.lock" || !entry.Type().IsRegular() {
+			if !hostingScratch(entry) && (entry.Name() != ".producer.lock" || !entry.Type().IsRegular()) {
 				return errHosting
 			}
 		}
@@ -83,7 +95,9 @@ func preflightState(root string, want hostingRecord) error {
 				return errHosting
 			}
 		default:
-			return errHosting
+			if !hostingScratch(entry) {
+				return errHosting
+			}
 		}
 	}
 	return nil
@@ -133,14 +147,34 @@ func bindHosting(root string, want hostingRecord) error {
 	if err := preflightState(root, want); err != nil {
 		return err
 	}
-	if _, err := os.Lstat(filepath.Join(root, "hosting.json")); err == nil {
-		return nil
-	}
 	dir, err := os.OpenRoot(root)
 	if err != nil {
 		return err
 	}
 	defer dir.Close()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	removed := false
+	for _, entry := range entries {
+		if hostingScratch(entry) {
+			if err := dir.Remove(entry.Name()); err != nil {
+				return err
+			}
+			removed = true
+		}
+	}
+	if removed {
+		if err := syncHostingDirectory(dir); err != nil {
+			return err
+		}
+	}
+	if _, err := dir.Lstat("hosting.json"); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	name := ".hosting-" + rand.Text()
 	file, err := dir.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
@@ -163,6 +197,10 @@ func bindHosting(root string, want hostingRecord) error {
 	if err = dir.Remove(name); err != nil {
 		return err
 	}
+	return syncHostingDirectory(dir)
+}
+
+func syncHostingDirectory(dir *os.Root) error {
 	f, err := dir.Open(".")
 	if err != nil {
 		return err

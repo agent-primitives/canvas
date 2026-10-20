@@ -271,6 +271,11 @@ func TLSLoopbackHandler(origin string, next http.Handler) (http.Handler, error) 
 	if err != nil || port < 1 || port > 65535 || origin != "https://127.0.0.1:"+strconv.Itoa(port) {
 		return nil, errors.New("canonical HTTPS loopback origin required")
 	}
+	if port == 443 {
+		// Browsers and WHATWG URL serialize the default HTTPS port without :443.
+		u.Host = "127.0.0.1"
+		origin = u.String()
+	}
 	return browserGuard(u.Host, origin, true, next), nil
 }
 

@@ -94,7 +94,9 @@ The API and readiness bind **only literal 127.0.0.1**, never `0.0.0.0`, DNS or
 IPv6. Ports must be numeric and separate. Port 0 is accepted only on these two
 listeners for local ephemeral tests. The configured browser `origin` must be
 canonical `https://127.0.0.1:<nonzero-port>`, without credentials, path, query or
-fragment; it need not use the pod's API port.
+fragment; it need not use the pod's API port. An explicit default port `:443`
+is checked against the canonical browser Host/Origin without that redundant port,
+as serialized by browsers and the Node adapter.
 
 `sessionsEndpoint` accepts only literal `127.0.0.1:<nonzero-port>` for local TLS
 assembly, or exactly `<service>.<namespace>.svc.cluster.local:<nonzero-port>`.
@@ -122,7 +124,13 @@ private `hosting.json` binding:
 ```
 
 All four values must match exactly on restart. An unmarked nonempty root is
-refused; only the stable regular `.producer.lock` is ignored on a fresh root.
+refused. A fresh root may contain only the stable regular `.producer.lock` and
+recognized marker-publication scratch files: private regular `.hosting-<nonce>`
+files in the generated base32 nonce format, each at most 4 KiB. Read-only
+preflight leaves them untouched; after acquiring the lifecycle lock, publication
+removes and fsyncs only those scratch entries, including when the final marker
+already exists. Malformed names, symlinks, directories, nonprivate/oversized
+scratch and all other unmarked data remain refused without cleanup.
 A matching marker with no Canvas/SharedSpace ledgers is a valid partial bootstrap
 and reopens without deletion/reset. Existing Canvas definition/project/policy
 bindings still apply; old local/unmarked history is never adopted as hosted.

@@ -31,6 +31,51 @@ func TestTLSLoopbackHandlerRejectsNoncanonicalOrigins(t *testing.T) {
 	}
 }
 
+func TestTLSLoopbackHandlerDefaultHTTPSPort(t *testing.T) {
+	// WHATWG URL / browser origins (including Node's HTTPS adapter) omit :443.
+	const origin = "https://127.0.0.1"
+	calls := 0
+	h, err := TLSLoopbackHandler(origin+":443", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := httptest.NewRecorder()
+	h.ServeHTTP(bootstrap, httptest.NewRequest(http.MethodGet, origin+"/", nil))
+	if bootstrap.Code != http.StatusNoContent {
+		t.Fatalf("canonical bootstrap: %d", bootstrap.Code)
+	}
+	cookies := bootstrap.Result().Cookies()
+	if len(cookies) != 1 || !cookies[0].Secure {
+		t.Fatal("secure bootstrap cookie missing")
+	}
+	for _, tc := range []struct {
+		host, origin string
+		status       int
+	}{
+		{"127.0.0.1", origin, http.StatusNoContent},
+		{"127.0.0.1:443", origin, http.StatusForbidden},
+		{"127.0.0.1", origin + ":443", http.StatusForbidden},
+		{"127.0.0.1:444", origin, http.StatusForbidden},
+		{"127.0.0.1", origin + ":444", http.StatusForbidden},
+	} {
+		r := httptest.NewRequest(http.MethodPost, origin+"/api/run", nil)
+		r.Host = tc.host
+		r.Header.Set("Origin", tc.origin)
+		r.AddCookie(cookies[0])
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != tc.status {
+			t.Fatalf("host=%s origin=%s: %d", tc.host, tc.origin, w.Code)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("endpoint calls=%d", calls)
+	}
+}
+
 // Pin LocalHandler's existing bytes except its random token; hosted differs only
 // by Secure and its explicit origin, not by CSP, cookie scope, or proxy trust.
 func TestBrowserGuardsHeadersCookiesAndBoundary(t *testing.T) {

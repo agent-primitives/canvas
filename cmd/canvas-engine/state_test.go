@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -53,6 +55,113 @@ func TestStatePreflightNoAdoptionOrPermissionRepair(t *testing.T) {
 				t.Fatal("preflight changed state")
 			}
 		})
+	}
+}
+
+func TestHostingBootstrapScratchRecovery(t *testing.T) {
+	for _, phase := range []string{"empty", "partial", "linked"} {
+		t.Run(phase, func(t *testing.T) {
+			cfg := validConfig(t)
+			root := cfg.StateDirectory
+			want := hostingRecord{Version: 1, InstanceID: cfg.InstanceID, DefinitionDigest: "digest", SessionsEndpoint: cfg.SessionsEndpoint}
+			if err := os.Mkdir(root, 0700); err != nil {
+				t.Fatal(err)
+			}
+			raw := []byte{}
+			if phase == "partial" {
+				raw = []byte(`{"version":`)
+			}
+			if phase == "linked" {
+				raw, _ = json.Marshal(want)
+				if err := os.WriteFile(filepath.Join(root, "hosting.json"), raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			scratch := filepath.Join(root, ".hosting-"+rand.Text())
+			if err := os.WriteFile(scratch, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := preflightState(root, want); err != nil {
+				t.Fatalf("crashed bootstrap refused: %v", err)
+			}
+			if _, err := os.Stat(scratch); err != nil {
+				t.Fatal("read-only preflight removed scratch")
+			}
+			release, err := acquireState(root, want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			if _, err := acquireState(root, want); err == nil {
+				t.Fatal("concurrent bootstrap accepted")
+			}
+			if _, err := os.Stat(scratch); err != nil {
+				t.Fatal("scratch removed before locked publication")
+			}
+			if err := bindHosting(root, want); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Stat(scratch); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("scratch remains: %v", err)
+			}
+			if err := preflightState(root, want); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestHostingBootstrapRejectsUnknownScratch(t *testing.T) {
+	for _, marked := range []bool{false, true} {
+		for _, kind := range []string{"malformed", "symlink", "directory", "nonprivate", "oversize", "history"} {
+			t.Run(kind+map[bool]string{false: "-unmarked", true: "-marked"}[marked], func(t *testing.T) {
+				cfg := validConfig(t)
+				root := cfg.StateDirectory
+				want := hostingRecord{Version: 1, InstanceID: cfg.InstanceID, DefinitionDigest: "digest", SessionsEndpoint: cfg.SessionsEndpoint}
+				if err := os.Mkdir(root, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if marked {
+					raw, _ := json.Marshal(want)
+					if err := os.WriteFile(filepath.Join(root, "hosting.json"), raw, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				name := ".hosting-" + rand.Text()
+				if kind == "malformed" {
+					name = ".hosting-x"
+				}
+				scratch := filepath.Join(root, name)
+				var err error
+				switch kind {
+				case "symlink":
+					err = os.Symlink(t.TempDir(), scratch)
+				case "directory":
+					err = os.Mkdir(scratch, 0700)
+				default:
+					data := []byte("partial")
+					if kind == "oversize" {
+						data = make([]byte, 4097)
+					}
+					err = os.WriteFile(scratch, data, 0600)
+					if err == nil && kind == "nonprivate" {
+						err = os.Chmod(scratch, 0644)
+					}
+					if err == nil && kind == "history" {
+						err = os.WriteFile(filepath.Join(root, "old-history"), []byte("retain"), 0600)
+					}
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := preflightState(root, want); !errors.Is(err, errHosting) {
+					t.Fatalf("want hosting refusal, got %v", err)
+				}
+				if _, err := os.Lstat(scratch); err != nil {
+					t.Fatal("refusal removed unknown data")
+				}
+			})
+		}
 	}
 }
 
