@@ -13,6 +13,10 @@ import (
 // TOOL_RESULT is the only receipt; successful replay emits no duplicate output.
 type announcementHarness struct{}
 
+// NewAnnouncementHarness exposes the existing fixed, model-free simulation
+// contract. Approval authority still belongs to the native controller.
+func NewAnnouncementHarness() api.Harness { return announcementHarness{} }
+
 func (announcementHarness) Describe(context.Context) (api.Descriptor, error) {
 	return api.Descriptor{
 		ID: announcement.HarnessName, Version: "1",
