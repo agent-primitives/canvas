@@ -12,7 +12,7 @@ replace github.com/agent-primitives/sessions/integrations/substrate => github.co
 require (
 	github.com/agent-primitives/sessions v0.2.0
 	github.com/agent-primitives/sessions/integrations/substrate v0.0.0-20261018160920-ce018b2daa0f
-	github.com/agent-primitives/suite v0.4.0
+	github.com/agent-primitives/suite v0.5.0
 	github.com/agent-substrate/substrate v0.4.1-0.20261013053953-96dffb287919
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/google/jsonschema-go v0.4.3
