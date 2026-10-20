@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "topic": {
+      "type": "string",
+      "title": "Topic",
+      "description": "A fictional topic for this workspace; independent topics should use a new instance.",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "audience": {
+      "type": "string",
+      "title": "Audience",
+      "enum": [
+        "engineering",
+        "product",
+        "stakeholders"
+      ],
+      "default": "stakeholders"
+    },
+    "includeRisks": {
+      "type": "boolean",
+      "title": "Include risks",
+      "default": true
+    }
+  },
+  "required": [
+    "topic"
+  ]
+}

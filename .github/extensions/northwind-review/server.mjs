@@ -6,10 +6,10 @@ import { open, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 
 const routes = {
-  GET: new Set(['/api/state', '/api/document', '/api/announcement', '/api/demo', '/api/forks']),
-  POST: new Set(['/api/run', '/api/review', '/api/verify', '/api/announcement/request', '/api/announcement/decision', '/api/announcement/continue', '/api/announcement/verify']),
+  GET: new Set(['/api/state', '/api/document', '/api/announcement', '/api/demo', '/api/forks', '/api/flows', '/api/flow']),
+  POST: new Set(['/api/run', '/api/review', '/api/verify', '/api/announcement/request', '/api/announcement/decision', '/api/announcement/continue', '/api/announcement/verify', '/api/flow/start', '/api/flow/changes', '/api/flow/retry', '/api/flow/cancel', '/api/flow/reconcile', '/api/flow/advance', '/api/flow/verify']),
 };
-const assets = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'] };
+const assets = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/flow.js': ['flow.js', 'text/javascript'] };
 const security = {
   'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff',
   'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'",
@@ -118,7 +118,8 @@ export async function startBridge(options = {}) {
     if (req.method === 'POST') {
       if (req.headers['content-type'] !== 'application/json') return reply(res, 415, { error: 'JSON required' });
       const parts = []; let size = 0;
-      for await (const chunk of req) { size += chunk.length; if (size > 16384) return reply(res, 413, { error: 'Action too large' }); parts.push(chunk); }
+      const limit = url.pathname === '/api/flow/start' ? 72 * 1024 : 16384;
+      for await (const chunk of req) { size += chunk.length; if (size > limit) return reply(res, 413, { error: 'Action too large' }); parts.push(chunk); }
       body = Buffer.concat(parts);
     }
     if ((await demoInfo()).boot !== boot) return reply(res, 409, { error: 'Engine restarted. Reopen the canvas; nothing was retried.', recovery: 'reopen' });

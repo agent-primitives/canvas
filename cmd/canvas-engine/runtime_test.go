@@ -181,7 +181,7 @@ func TestHostedTLSRunReviewReopen(t *testing.T) {
 	}
 	var meta map[string]any
 	request(t, e, hc, "GET", "/api/demo", nil, &meta)
-	if meta["mode"] != "hosted-sessions" || meta["modelCalls"] != nil || meta["executorCalls"] != nil || meta["boot"] == "" {
+	if meta["mode"] != "hosted-sessions" || meta["modelCalls"] != nil || meta["executorCalls"] != nil || meta["boot"] == "" || meta["flowRuntime"] != nil {
 		t.Fatal(meta)
 	}
 	boot := meta["boot"]
@@ -192,10 +192,15 @@ func TestHostedTLSRunReviewReopen(t *testing.T) {
 				t.Fatalf("announcement %s %s: %d %+v", prefix, suffix, code, out)
 			}
 		}
-		for _, name := range []string{"resume", "ask", "input", "comment", "role", "regenerate", "other"} {
+		for _, name := range []string{"resume", "ask", "input", "comment", "role", "regenerate", "other", "flow/start", "flow/changes", "flow/retry", "flow/cancel", "flow/reconcile", "flow/advance", "flow/verify"} {
 			code := request(t, e, hc, "POST", prefix+"/api/"+name, map[string]string{}, nil)
 			if code != 404 && code != 405 {
 				t.Fatalf("legacy %s/%s: %d", prefix, name, code)
+			}
+		}
+		for _, name := range []string{"flows", "flow"} {
+			if code := request(t, e, hc, "GET", prefix+"/api/"+name, nil, nil); code != http.StatusNotFound {
+				t.Fatalf("hosted flow %s/%s: %d", prefix, name, code)
 			}
 		}
 	}
