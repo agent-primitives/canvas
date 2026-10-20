@@ -3,6 +3,7 @@ import { Agent, request } from 'node:https';
 import { isAbsolute } from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { open, readFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
 
 const routes = {
   GET: new Set(['/api/state', '/api/document', '/api/announcement', '/api/demo', '/api/forks']),
@@ -14,21 +15,25 @@ const security = {
   'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'",
 };
 
+async function readRegular(filePath, limit, label) {
+  // An ordinary read-only open can wait for a FIFO writer before fstat runs.
+  const file = await open(filePath, constants.O_RDONLY | constants.O_NONBLOCK);
+  try {
+    if (!(await file.stat()).isFile()) throw new Error(`${label} must be a regular file`);
+    const buffer = Buffer.alloc(limit + 1);
+    let size = 0, count;
+    while (size < buffer.length && (count = (await file.read(buffer, size, buffer.length - size, null)).bytesRead)) size += count;
+    if (size > limit) throw new Error(`${label} exceeds ${limit} bytes`);
+    return buffer.subarray(0, size);
+  } finally { await file.close(); }
+}
+
 async function connectionOptions(options) {
   const explicit = Object.hasOwn(options, 'engineURL') || Object.hasOwn(options, 'caFile');
   const configFile = process.env.CANVAS_ENGINE_CONFIG;
   if (configFile && explicit) throw new Error('Engine config conflicts with explicit connection options');
   if (configFile) {
-    const file = await open(configFile, 'r');
-    let bytes;
-    try {
-      if (!(await file.stat()).isFile()) throw new Error('Engine config must be a regular JSON file');
-      const buffer = Buffer.alloc(65537);
-      let size = 0, count;
-      while (size < buffer.length && (count = (await file.read(buffer, size, buffer.length - size, null)).bytesRead)) size += count;
-      if (size > 65536) throw new Error('Engine config exceeds 64 KiB');
-      bytes = buffer.subarray(0, size).toString('utf8');
-    } finally { await file.close(); }
+    const bytes = (await readRegular(configFile, 65536, 'Engine config')).toString('utf8');
     const data = JSON.parse(bytes);
     // JSON.parse accepts duplicate members; reject those as ambiguous operator input.
     const tokens = bytes.match(/"(?:\\.|[^"\\])*"|[{}[\]:,]|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null/g) || [];
@@ -41,7 +46,7 @@ async function connectionOptions(options) {
   if (!match || Number(match[2]) > 65535) throw new Error('A literal loopback engine URL is required');
   const secure = match[1] === 'https';
   if (secure ? typeof options.caFile !== 'string' || !isAbsolute(options.caFile) : Object.hasOwn(options, 'caFile')) throw new Error('A literal loopback engine URL over HTTPS requires an absolute CA file; HTTP forbids CA configuration');
-  return { engine: new URL(engineURL), ca: secure ? await readFile(options.caFile) : undefined };
+  return { engine: new URL(engineURL), ca: secure ? await readRegular(options.caFile, 1 << 20, 'Engine CA') : undefined };
 }
 
 // Deliberately separate from globalAgent/fetch: only the selected CA and direct TLS

@@ -153,6 +153,30 @@ test('closed config and explicit options reject unsafe/mixed selections without 
   assert.equal((await (await fetch(defaultBridge.origin + '/api/demo', { headers: headers(defaultBridge) })).json()).mode, 'deterministic-northwind');
 });
 
+test('operator config and CA FIFOs refuse without waiting for a writer', { skip: process.platform === 'win32' }, async t => {
+  for (const kind of ['config', 'CA']) {
+    await t.test(kind, () => {
+      const fifo = path.join(directory, `${kind}.fifo`);
+      execFileSync('mkfifo', [fifo]);
+      const options = kind === 'config' ? {} : { engineURL: 'https://127.0.0.1:8443', caFile: fifo };
+      const source = `const {startBridge}=await import(${JSON.stringify(moduleURL)}); try { await startBridge(${JSON.stringify(options)}); process.exit(21); } catch(e) { if (!/regular/.test(e.message)) throw e; }`;
+      execFileSync(process.execPath, ['--input-type=module', '-e', source], {
+        env: { ...process.env, CANVAS_ENGINE_CONFIG: kind === 'config' ? fifo : '' },
+        timeout: 3000, stdio: 'pipe',
+      });
+    });
+  }
+});
+
+test('operator CA files reject directories and oversized content before connecting', async () => {
+  const { startBridge } = await import(moduleURL);
+  const oversized = path.join(directory, 'oversized-ca.crt');
+  fs.writeFileSync(oversized, Buffer.alloc((1 << 20) + 1));
+  for (const caFile of [directory, oversized]) {
+    await assert.rejects(startBridge({ engineURL: 'https://127.0.0.1:8443', caFile }), /regular|exceeds/);
+  }
+});
+
 function subprocess(env, options, succeeds) {
   const source = `const {startBridge}=await import(${JSON.stringify(moduleURL)}); try { const b=await startBridge(${JSON.stringify(options)}); await b.close(); if (!${succeeds}) process.exit(21); } catch(e) { if (${succeeds}) { console.error(e); process.exit(22); } }`;
   return new Promise((resolve, reject) => {

@@ -162,7 +162,8 @@ from another trusted process/operator in the same network namespace.
 The Copilot adapter's separate bounded connection file uses only
 `version`, `engineURL` and `caFile`, selected by **path** in
 `CANVAS_ENGINE_CONFIG`. Do not give the adapter the engine's runtime configuration.
-For example, with a locally prepared CA path:
+Both paths must resolve to regular files: the connection JSON is limited to
+64 KiB and the CA file to 1 MiB. For example, with a locally prepared CA path:
 
 ```json
 {"version":1,"engineURL":"https://127.0.0.1:18443","caFile":"/absolute/local/engine-ca.crt"}
