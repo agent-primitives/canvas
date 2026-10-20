@@ -1,17 +1,16 @@
 # Sessions runtime compatibility
 
-Canvas uses canonical `github.com/agent-primitives/sessions` module paths with
-explicit replacements to the public `gambtho/agentsessions` fork at
-`ce018b2daa0f`, including native approval, authentication interceptors and guarded
-Resume. Upstream provider compatibility is a separate follow-up:
+Canvas builds against canonical `github.com/agent-primitives/sessions` upstream
+main at `f18a2cb1454d1eea0c9e9063646a5251653bd95e`, including native approval,
+authentication interceptors and guarded Resume:
 
-- Core replacement: `v0.1.3-0.20261018160920-ce018b2daa0f`
-- Substrate integration replacement: `v0.0.0-20261018160920-ce018b2daa0f`
+- Core: `v0.2.1-0.20261019224537-f18a2cb1454d`
+- Substrate integration: `v0.0.0-20261019224537-f18a2cb1454d`
 - Resolved Substrate: `v0.4.1-0.20261013053953-96dffb287919`, upgraded from
   `fc0e3586a6de` through the integration's module requirement.
 - Go floor: 1.27.0 (required by the integration); selected toolchain: 1.27.2.
 
-These replacements are recorded in `go.mod`, not an external workspace. Use
+These are ordinary Go module requirements, without fork or workspace replacements. Use
 `GOWORK=off make build` and `GOWORK=off make test` to verify the shipped modules.
 The Docker build-stage digest is the registry-verified multi-platform index for
 `golang:1.27.2-alpine`; the app runtime image remains separately pinned.
