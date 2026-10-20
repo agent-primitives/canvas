@@ -25,6 +25,9 @@ func questionBinding(a *attempt) bool {
 func (c *Canvas) questionBusyLocked(session string) bool {
 	return c.turnBusyLocked(session) || c.recoveryBusyLocked(session, "")
 }
+func (c *Canvas) askBusyLocked(session string) bool {
+	return c.activeFlowLocked() || c.questionBusyLocked(session)
+}
 func (c *Canvas) turnBusyLocked(session string) bool {
 	for _, a := range c.data.Attempts {
 		if a.Session == session && (a.Status == "queued" || a.Status == "running") {
@@ -66,6 +69,11 @@ func (c *Canvas) Ask(runID, text, role string) (string, error) {
 // within the request lifetime under the execution service. The queued turn
 // then runs under the engine's lifetime, never the HTTP request's.
 func (c *Canvas) AskContext(ctx context.Context, runID, text, role string) (string, error) {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+	if err := c.competingFlow(); err != nil {
+		return "", err
+	}
 	_, requestedBy, err := c.requester(ctx, role)
 	if err != nil {
 		return "", err
@@ -80,12 +88,12 @@ func (c *Canvas) AskContext(ctx context.Context, runID, text, role string) (stri
 		c.mu.Unlock()
 		return "", errNotFound
 	}
-	if !questionBinding(original) || !c.ownedLocked(original.ExecutionOwner) {
+	if original.FlowRun != "" || !questionBinding(original) || !c.ownedLocked(original.ExecutionOwner) {
 		c.mu.Unlock()
 		return "", ErrQuestionsUnsupported
 	}
 	a := *original
-	if c.questionBusyLocked(a.Session) {
+	if c.askBusyLocked(a.Session) {
 		c.mu.Unlock()
 		return "", ErrQuestionBusy
 	}
@@ -129,7 +137,7 @@ func (c *Canvas) AskContext(ctx context.Context, runID, text, role string) (stri
 	if c.ctx.Err() != nil {
 		return "", errors.New("canvas stopping")
 	}
-	if c.questionBusyLocked(a.Session) {
+	if c.askBusyLocked(a.Session) {
 		return "", ErrQuestionBusy
 	}
 	if err := c.appendConversationLocked(entry); err != nil {

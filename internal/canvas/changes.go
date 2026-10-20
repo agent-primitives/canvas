@@ -9,6 +9,40 @@ import (
 
 const maxProposalChanges = 32
 
+// ErrMissingGateOutputs means a flow proposal omitted a required gate document.
+var ErrMissingGateOutputs = errors.New("flow proposal is missing required gate outputs")
+
+// ChangesForStep validates a whole flow-bound proposal, without activating or
+// advancing a workflow. The private compiled step supplies agent and gate scope.
+func (d *CompiledDefinition) ChangesForStep(flowID, stepID, output string) (map[string]string, error) {
+	if d == nil {
+		return nil, errDefinition
+	}
+	flow, ok := d.flows[flowID]
+	if !ok {
+		return nil, errDefinition
+	}
+	for _, step := range flow.definition.Steps {
+		if step.ID != stepID {
+			continue
+		}
+		if step.Agent == "" || step.Gate == nil {
+			return nil, errDefinition
+		}
+		changes, err := d.Changes(step.Agent, output)
+		if err != nil {
+			return nil, err
+		}
+		for _, name := range step.Gate.Accept {
+			if _, present := changes[d.documents[name].path]; !present {
+				return nil, ErrMissingGateOutputs
+			}
+		}
+		return changes, nil
+	}
+	return nil, errDefinition
+}
+
 // Changes validates the entire set before returning any path-addressed writes.
 // Paths come only from compiled declarations, never from model output.
 func (d *CompiledDefinition) Changes(agent, output string) (map[string]string, error) {

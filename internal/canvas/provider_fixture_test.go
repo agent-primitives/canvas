@@ -50,7 +50,12 @@ func nativeProviderFixture(t *testing.T, d *CompiledDefinition, provider func(co
 		space.Close()
 		t.Fatal(err)
 	}
-	c, err := OpenDefined(filepath.Join(root, "canvas"), space, cl, h.Address(), d, contract.LocalBinder{})
+	var c *Canvas
+	if len(d.flows) > 0 {
+		c, err = OpenFlowRuntime(filepath.Join(root, "canvas"), space, cl, h.Address(), d, contract.LocalBinder{}, FlowRuntimeOptions{MaxAgentRuns: 12})
+	} else {
+		c, err = OpenDefined(filepath.Join(root, "canvas"), space, cl, h.Address(), d, contract.LocalBinder{})
+	}
 	if err != nil {
 		cl.Close()
 		h.Close()
