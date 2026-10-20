@@ -9,7 +9,9 @@ const routes = {
   GET: new Set(['/api/state', '/api/document', '/api/announcement', '/api/demo', '/api/forks', '/api/flows', '/api/flow']),
   POST: new Set(['/api/run', '/api/review', '/api/verify', '/api/announcement/request', '/api/announcement/decision', '/api/announcement/continue', '/api/announcement/verify', '/api/flow/start', '/api/flow/changes', '/api/flow/retry', '/api/flow/cancel', '/api/flow/reconcile', '/api/flow/advance', '/api/flow/verify']),
 };
-const assets = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/flow.js': ['flow.js', 'text/javascript'] };
+const authoringReads = new Set(['/api/authoring', '/api/authoring/candidate', '/api/authoring/file', '/api/authoring/instance']);
+const authoringWrites = new Set(['/api/authoring/prepare', '/api/authoring/activate']);
+const assets = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/flow.js': ['flow.js', 'text/javascript'], '/activation.js': ['activation.js', 'text/javascript'] };
 const security = {
   'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff',
   'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'",
@@ -87,11 +89,12 @@ export async function startBridge(options = {}) {
     const response = await upstream('/api/demo');
     if (!response.ok) throw new Error('Start the configured Canvas review engine first');
     const data = await response.json();
-    if (!['deterministic-northwind', 'authenticated-sessions', 'trusted-loopback-sessions', 'hosted-sessions', 'hosted-model', 'offline-model'].includes(data.mode) || (data.mode === 'deterministic-northwind' && data.realModelCalls !== 0) || typeof data.boot !== 'string' || !data.boot || data.boot.length > 128) throw new Error('Supported Canvas review engine required');
+    if ((!['deterministic-northwind', 'deterministic-template', 'authenticated-sessions', 'trusted-loopback-sessions', 'hosted-sessions', 'hosted-model', 'offline-model'].includes(data.mode) && !(data.authoring === true && data.mode === 'inert-authoring' && data.activeInstance === '')) || (['deterministic-northwind', 'deterministic-template'].includes(data.mode) && data.realModelCalls !== 0) || typeof data.boot !== 'string' || !data.boot || data.boot.length > 128) throw new Error('Supported Canvas review engine required');
+    if (data.authoring && typeof data.activeInstance !== 'string') throw new Error('Authoring instance required');
     return data;
   }
   const initialDemo = await demoInfo();
-  const boot = initialDemo.boot;
+  let boot = initialDemo.boot, instance = initialDemo.activeInstance, pendingBinding = initialDemo.pendingActivation;
   const headlessPrefix = initialDemo.headlessPrefix || '';
   if (!['', '/engine'].includes(headlessPrefix) || (initialDemo.mode === 'hosted-sessions' && headlessPrefix !== '/engine')) throw new Error('Unsupported engine API prefix');
   const bootstrap = await upstream('/');
@@ -113,24 +116,37 @@ export async function startBridge(options = {}) {
     if (typeof supplied !== 'string' || !/^[a-f0-9]{64}$/.test(supplied) || !timingSafeEqual(Buffer.from(token), Buffer.from(supplied)) || (req.headers.origin && req.headers.origin !== origin) || (req.method === 'POST' && req.headers.origin !== origin) || req.headers['sec-fetch-site'] === 'cross-site') {
       return reply(res, 403, { error: 'Fresh same-origin canvas capability required. Reopen the canvas.', recovery: 'reopen' });
     }
-    if (!routes[req.method]?.has(url.pathname)) return reply(res, 404, { error: 'Unsupported review route' });
+    const authoringRead = initialDemo.authoring && req.method === 'GET' && authoringReads.has(url.pathname);
+    const authoringWrite = initialDemo.authoring && req.method === 'POST' && authoringWrites.has(url.pathname);
+    if (!routes[req.method]?.has(url.pathname) && !authoringRead && !authoringWrite) return reply(res, 404, { error: 'Unsupported review route' });
     let body;
     if (req.method === 'POST') {
       if (req.headers['content-type'] !== 'application/json') return reply(res, 415, { error: 'JSON required' });
       const parts = []; let size = 0;
-      const limit = url.pathname === '/api/flow/start' ? 72 * 1024 : 16384;
+      const limit = authoringWrite ? 4096 : url.pathname === '/api/flow/start' ? 72 * 1024 : 16384;
       for await (const chunk of req) { size += chunk.length; if (size > limit) return reply(res, 413, { error: 'Action too large' }); parts.push(chunk); }
       body = Buffer.concat(parts);
     }
-    if ((await demoInfo()).boot !== boot) return reply(res, 409, { error: 'Engine restarted. Reopen the canvas; nothing was retried.', recovery: 'reopen' });
+    // Catalog/archive reads may explain a changed boot, but can never renew it.
+    if (!authoringRead && (await demoInfo()).boot !== boot) return reply(res, 409, { error: 'Engine restarted. Reopen the canvas; nothing was retried.', recovery: 'reopen' });
     if (initialDemo.mode === 'hosted-sessions' && req.method === 'POST' && (url.pathname === '/api/verify' || url.pathname.startsWith('/api/announcement/'))) return reply(res, 409, { error: 'Hosted announcements and replay are unavailable. Identity not exercised; nothing was executed.' });
-    // Engine credentials never enter the iframe; engine CSRF checks remain unchanged.
-    const upstreamPath = (url.pathname === '/api/demo' ? '' : headlessPrefix) + url.pathname + url.search;
-    const response = await upstream(upstreamPath, { method: req.method, body, headers: { Cookie: cookie, Origin: engine.origin, 'Content-Type': 'application/json' } });
+    const priorInstance = instance, priorBoot = boot;
+    // Engine credentials and the inspected instance never come from iframe fields.
+    const upstreamPath = (url.pathname === '/api/demo' || authoringRead || authoringWrite ? '' : headlessPrefix) + url.pathname + url.search;
+    const response = await upstream(upstreamPath, { method: req.method, body, headers: { Cookie: cookie, Origin: engine.origin, 'Content-Type': 'application/json', ...(initialDemo.authoring ? { 'X-Canvas-Instance': instance } : {}) } });
     const parts = []; let size = 0;
-    for await (const chunk of response.body) { size += chunk.length; if (size > 4 * 1024 * 1024) throw new Error('Engine view exceeds local bound'); parts.push(chunk); }
+    const viewLimit = url.pathname === '/api/authoring/file' ? 50 * 1024 * 1024 : url.pathname === '/api/authoring/instance' ? 66 * 1024 * 1024 : 4 * 1024 * 1024;
+    for await (const chunk of response.body) { size += chunk.length; if (size > viewLimit) throw new Error('Engine view exceeds local bound'); parts.push(chunk); }
     // Only JSON/status cross the boundary. No upstream cookies, redirects or headers.
     const result = JSON.parse(Buffer.concat(parts).toString('utf8'));
+    if (url.pathname === '/api/authoring/activate' && response.ok) {
+      const request = JSON.parse(body.toString('utf8')), next = await demoInfo();
+      const exactPending = pendingBinding && ['candidate', 'expectedCurrent', 'requestKey', 'confirmed', 'actor'].every(key => request[key] === pendingBinding[key]) && result.instance?.id === pendingBinding.instance;
+      const activationBase = exactPending ? pendingBinding.expectedCurrent : priorInstance;
+      if (priorBoot !== boot || request.expectedCurrent !== activationBase || !request.candidate || result.instance?.package !== request.candidate || (result.instance?.previous || '') !== activationBase || !result.instance?.id || next.activeInstance !== result.instance.id || !next.authoring) throw new Error('Activation outcome requires reopen');
+      // This bridge observed its own exact committed activation. All other bridges stay stale.
+      boot = next.boot; instance = next.activeInstance; pendingBinding = undefined;
+    }
     reply(res, response.status, result);
   }
   const server = createServer((req, res) => { handle(req, res).catch(() => { if (!res.headersSent) reply(res, 503, { error: 'Engine unavailable or view invalid. Refresh before another action; nothing was retried.', recovery: 'refresh' }); else res.destroy(); }); });

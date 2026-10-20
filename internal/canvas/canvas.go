@@ -169,6 +169,9 @@ type Canvas struct {
 }
 
 func openCanvas(root string, space sharedspace.SharedSpace, cl *client.Client, address string, bundles []contract.Bundle, binder contract.ContractBinder, triggers []Trigger, definition *CompiledDefinition) (*Canvas, error) {
+	if err := CheckWritable(root); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, errors.New("cannot create private canvas state")
 	}

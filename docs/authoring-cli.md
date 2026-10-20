@@ -123,10 +123,11 @@ and saved definition digests remain unchanged. v1alpha2 rejects the new fields,
 including empty ones. v1alpha3 can declare flows alongside existing manual and
 file-added triggers; without a flow, a manual trigger is still required.
 
-Flow support is **compilation only**, not a scheduler. Canvas, the standalone
-Sessions host and the Copilot review command refuse flow-bearing definitions
-before dependency resolution/cache writes or runtime startup. Validation does
-not activate flows or enforce gates on a running agent.
+Validation is **compilation only**, not execution. Ordinary Canvas and standalone
+Sessions startup refuse flow-bearing definitions. The local Copilot panel has a
+separate explicit positive `-flow-agent-runs` opt-in, with either operator-loaded
+`-definition` or human-activated frozen packages under `-draft-root`; see
+[local review and activation](copilot-review.md). Validation itself starts nothing.
 
 For example, extend a generated single-review package with this fragment, keeping
 its other agent, seed and schema declarations:
@@ -244,4 +245,6 @@ not make an arbitrary kmx composition executable by Canvas; tools, named runtime
 profiles, models and other execution restrictions remain. See
 [the existing authoring boundaries](canvas-authoring.md) and
 [generic local startup](generic-canvas.md) for current behavior. Copilot drafting,
-setup-file approval/export, real-agent integration and Lift are not added here.
+frozen package review/activation are described in the linked guides. Setup-file
+approval/export, new agent production, real-provider qualification and Lift remain
+separate; no binding operation grants execution or human-decision authority.

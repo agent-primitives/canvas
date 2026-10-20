@@ -9,26 +9,26 @@ const { createServer } = require('node:http');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || path.join(execFileSync('npm', ['root', '-g'], { encoding: 'utf8' }).trim(), 'playwright'));
 const root = path.join(__dirname, '..');
 
-async function flowPanel(t, transform) {
+async function flowPanel(t, transform, authoring = false, beforeNavigate) {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-flow-panel-'));
   t.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
   const binary = path.join(scratch, 'copilot-review');
   execFileSync('go', ['build', '-o', binary, './cmd/copilot-review'], { cwd: root, stdio: 'pipe' });
   let definition = 'examples/northwind-prd/flow.yaml';
-  if (transform) {
+  if (transform || authoring) {
     const directory = path.join(scratch, 'definition');
     fs.cpSync(path.join(root, 'examples/northwind-prd'), directory, { recursive: true });
     definition = path.join(directory, 'flow.yaml');
-    fs.writeFileSync(definition, transform(fs.readFileSync(definition, 'utf8')));
+    if (transform) fs.writeFileSync(definition, transform(fs.readFileSync(definition, 'utf8')));
   }
-  let child, exited, engineURL, bridge;
+  let child, exited, engineURL, bridge, stderr = '';
   async function start(listen = '127.0.0.1:0') {
-    child = spawn(binary, ['-definition', definition, '-state', path.join(scratch, 'state'), '-flow-agent-runs', '12', '-listen', listen], { cwd: root, env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: os.tmpdir() }, stdio: ['ignore', 'pipe', 'pipe'] });
+    child = spawn(binary, [...(authoring ? ['-draft-root', path.dirname(definition)] : ['-definition', definition]), '-state', path.join(scratch, 'state'), '-flow-agent-runs', '12', '-listen', listen], { cwd: root, env: { PATH: process.env.PATH, HOME: process.env.HOME, TMPDIR: os.tmpdir() }, stdio: ['ignore', 'pipe', 'pipe'] });
     exited = new Promise(resolve => { child.once('exit', resolve); child.once('error', resolve); });
-    child.stderr.resume();
+    child.stderr.on('data', chunk => { stderr += chunk; });
     engineURL = await new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Flow engine startup timeout')), 10000);
-      exited.then(() => { clearTimeout(timeout); reject(new Error('Flow engine exited before readiness')); });
+      exited.then(() => { clearTimeout(timeout); reject(new Error('Flow engine exited before readiness: ' + stderr)); });
       child.stdout.on('data', chunk => { const match = String(chunk).match(/http:\/\/127\.0\.0\.1:\d+/); if (match) { clearTimeout(timeout); resolve(match[0]); } });
     });
   }
@@ -42,8 +42,9 @@ async function flowPanel(t, transform) {
   const browser = await chromium.launch({ headless: true }); t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 900, height: 1000 } }); page.setDefaultTimeout(5000);
   const errors = []; page.on('pageerror', error => errors.push(error.message));
-  const posts = []; page.on('request', req => { if (req.method() === 'POST') posts.push({ path: new URL(req.url()).pathname, body: req.postDataJSON() }); });
+  const requests = [], posts = []; page.on('request', req => { requests.push(new URL(req.url()).pathname); if (req.method() === 'POST') posts.push({ path: new URL(req.url()).pathname, body: req.postDataJSON() }); });
   const url = `http://localhost:${parent.address().port}`;
+  if (beforeNavigate) await beforeNavigate(page, bridge);
   await page.goto(url);
   const frame = page.frameLocator('iframe');
   const ready = () => frame.locator('#refresh:not(:disabled)').waitFor();
@@ -51,7 +52,11 @@ async function flowPanel(t, transform) {
     const headers = { 'x-canvas-review-token': new URL(bridge.url).hash.slice('#token='.length) };
     const response = await fetch(bridge.origin + route, { headers }); assert.equal(response.status, 200); return response.json();
   }
-  return { page, frame, ready, api, posts, errors, get bridge() { return bridge; },
+  return { page, frame, ready, api, requests, posts, errors, draftRoot: path.dirname(definition), get bridge() { return bridge; },
+    async rawPost(route, instance, body) {
+      const bootstrap = await fetch(engineURL + '/'); await bootstrap.body.cancel();
+      return fetch(engineURL + route, { method: 'POST', headers: { Cookie: bootstrap.headers.getSetCookie().find(value => value.startsWith('canvas-local=')).split(';')[0], Origin: engineURL, 'Content-Type': 'application/json', 'X-Canvas-Instance': instance }, body: JSON.stringify(body) });
+    },
     async reopen() { await bridge.close(); bridge = await startBridge({ engineURL }); await page.goto(url); await ready(); },
     async restart() { const listen = new URL(engineURL).host; await stop(); await start(listen); },
   };
@@ -73,6 +78,97 @@ async function acceptGate(p, step) {
   await p.frame.locator('#document-confirm:not(:disabled)').check();
   await p.frame.locator('#accept:not(:disabled)').click();
 }
+
+test('initial metadata failure stays offline and manual inspection restores normal polling', async t => {
+  const p = await flowPanel(t, undefined, false, async (page, bridge) => {
+    let first = true;
+    await page.route(bridge.origin + '/api/demo', async route => { if (first) { first = false; await route.abort('failed'); } else await route.continue(); });
+  });
+  await p.frame.locator('#offline').waitFor({ state: 'visible' });
+  assert.equal(p.requests.filter(path => path === '/api/state').length, 0, 'unknown mode must not read runtime state');
+  await p.frame.locator('#refresh:not(:disabled)').click(); await p.ready();
+  await p.frame.locator('#connection').filter({ hasText: 'Connected.' }).waitFor();
+  await p.page.waitForRequest(request => new URL(request.url()).pathname === '/api/state');
+  assert.equal(await p.frame.locator('#flow-open').isVisible(), true);
+  assert.deepEqual(p.errors, []);
+});
+
+test('authoring iframe freezes explicit review, activates fresh seeds and retains read-only linked history', async t => {
+  const p = await flowPanel(t, text => text.replace('        - {id: announce, action: announce}\n', ''), true);
+  const { frame, page } = p;
+  await frame.locator('#activation-prepare').waitFor();
+  assert.equal(await frame.locator('#draft').isVisible(), false);
+  assert.equal((await p.api('/api/demo')).providerCalls, 0);
+  assert.equal((await p.api('/api/authoring')).active, '');
+  assert.equal(p.posts.length, 0, 'opening an inert draft never prepares or starts it');
+  assert(!p.requests.some(route => ['/api/state', '/api/flows', '/flow.js'].includes(route)), 'inert setup does not import or poll the runtime');
+  const prepare = async () => { await frame.locator('#activation-definition').fill('flow.yaml'); await frame.locator('#activation-prepare').click(); await frame.locator('#activation-confirm:not(:disabled)').waitFor(); };
+  await prepare();
+  const firstPackage = await p.api('/api/authoring/candidate?id=' + (await p.api('/api/authoring')).candidate);
+  const frozenSeed = firstPackage.files.find(file => file.path === 'seeds/prd.json');
+  assert(frozenSeed, 'fixture declares a PRD seed');
+  const source = path.join(p.draftRoot, frozenSeed.path);
+  const original = JSON.parse(fs.readFileSync(source, 'utf8')); original.title = 'UNREVIEWED WORKING SEED'; fs.writeFileSync(source, JSON.stringify(original));
+  await frame.locator('#activation-confirm').check();
+  const abort = route => route.abort('failed');
+  await page.route(p.bridge.origin + '/api/authoring/activate', abort);
+  await page.route(p.bridge.origin + '/api/authoring', abort);
+  await frame.locator('#activation-activate').click();
+  await frame.locator('#activation-status').filter({ hasText: 'saved exact request retained' }).waitFor();
+  const firstRequest = p.posts.find(post => post.path === '/api/authoring/activate').body;
+  const actualFrame = () => page.frames().find(current => current.url().startsWith(p.bridge.origin));
+  assert.deepEqual(await actualFrame().evaluate(() => JSON.parse(sessionStorage.getItem('canvas-frozen-activation'))), firstRequest);
+  await page.unroute(p.bridge.origin + '/api/authoring', abort);
+  await page.reload(); await frame.locator('#activation-continue:not([hidden])').waitFor();
+  assert.equal(p.posts.filter(post => post.path === '/api/authoring/activate').length, 1, 'reload never retries an unknown activation');
+  await page.unroute(p.bridge.origin + '/api/authoring/activate', abort);
+  await frame.locator('#activation-continue').click();
+  await frame.locator('#activation-current').filter({ hasText: 'Inert draft.' }).waitFor({ state: 'hidden' }); await p.ready();
+  assert.deepEqual(p.posts.filter(post => post.path === '/api/authoring/activate')[1].body, firstRequest);
+  await frame.locator('#flow-open:not(:disabled)').waitFor();
+  const first = (await p.api('/api/demo')).activeInstance;
+  const initial = await p.api('/api/document?path=prd.json');
+  assert(!JSON.stringify(initial).includes('UNREVIEWED WORKING SEED'));
+  await startTopic(p, 'Archived accepted native bytes');
+  await acceptGate(p, 'draft'); await acceptGate(p, 'critique'); await acceptGate(p, 'revise');
+  await frame.locator('#flow-status').filter({ hasText: 'Complete' }).waitFor(); await p.ready();
+  const accepted = await p.api('/api/document?path=prd.json');
+  await prepare();
+  assert.equal(await frame.locator('#activation-confirm').isChecked(), false);
+  await frame.locator('#activation-confirm').check(); await frame.locator('#activation-activate').click();
+  await frame.locator('#activation-current').filter({ hasText: first }).waitFor({ state: 'hidden' }); await p.ready();
+  await frame.locator('#flow-open:not(:disabled)').waitFor();
+  const second = (await p.api('/api/demo')).activeInstance; assert.notEqual(first, second);
+  assert.equal((await p.api('/api/demo')).providerCalls, 0);
+  const fresh = await p.api('/api/state'); assert.equal(fresh.proposals?.length || 0, 0); assert.equal(fresh.announcements?.length || 0, 0);
+  assert.match(JSON.stringify(await p.api('/api/document?path=prd.json')), /UNREVIEWED WORKING SEED/);
+  const old = await p.api('/api/authoring/instance?id=' + first);
+  assert.equal(old.instance.next, second);
+  assert.equal((await p.api('/api/authoring')).instances.find(instance => instance.id === second).previous, first);
+  assert.equal(old.archive.documents['prd.json'].content, accepted.accepted, 'archive preserves the complete accepted bytes, not a preview');
+  assert.match(accepted.accepted, /Archived accepted native bytes/);
+  assert.equal((await p.rawPost('/api/flow/start', first, { flow: 'release', requestKey: 'stale-instance-key', inputs: { topic: 'must not run' }, agentRuns: 12, role: 'GM' })).status, 409);
+  assert.equal((await p.api('/api/demo')).providerCalls, 0);
+  await frame.locator('#activation-history').selectOption(first);
+  await frame.locator('#activation-archive').filter({ hasText: 'Archived accepted native bytes' }).waitFor();
+  assert.equal(await frame.locator('#accept').isVisible(), false, 'history has no live mutation controls');
+  await frame.locator('#activation-confirm').check();
+  await p.restart();
+  await frame.locator('#activation-status').filter({ hasText: 'boot changed' }).waitFor();
+  assert.equal(await frame.locator('#activation-confirm').isChecked(), false);
+  await p.reopen();
+  assert.equal((await p.api('/api/demo')).providerCalls, 0);
+  assert.equal((await p.api('/api/authoring/instance?id=' + first)).instance.next, second);
+  original.title = 'Third frozen seed'; fs.writeFileSync(source, JSON.stringify(original)); await prepare();
+  await page.route(p.bridge.origin + '/api/authoring/activate', async route => { await route.fetch(); await route.abort('failed'); });
+  await frame.locator('#activation-confirm').check(); await frame.locator('#activation-activate').click();
+  await frame.locator('#activation-status').filter({ hasText: 'Activation appears committed. Reopen' }).waitFor();
+  const lost = p.posts.filter(post => post.path === '/api/authoring/activate').at(-1).body;
+  assert.deepEqual(await actualFrame().evaluate(() => JSON.parse(sessionStorage.getItem('canvas-frozen-activation'))), lost);
+  assert.equal(await frame.locator('#activation-continue').isVisible(), false, 'committed unknown is not retried or rebound by the panel');
+  assert.equal((await p.api('/api/demo')).providerCalls, 0);
+  assert.deepEqual(p.errors, []);
+});
 
 test('actual flow iframe binds topic and every human gate, separates Continue and proves aggregate native replay', async t => {
   const p = await flowPanel(t), { page, frame } = p;

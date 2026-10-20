@@ -1,14 +1,21 @@
 package canvas
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/agent-primitives/canvas/internal/contract"
+	"github.com/agent-primitives/canvas/internal/sharedspace"
 	"github.com/agent-primitives/sessions/client"
 	"google.golang.org/grpc"
 )
@@ -158,5 +165,350 @@ func TestDefinedFixedRoleDefaultsAndInvalidSavedFallback(t *testing.T) {
 	state, _ = reopened.State()
 	if state.Role != "GM" || readPublishedLedger(t, reopened).Role != "GM" {
 		t.Fatal("invalid persisted role did not fall back durably to GM")
+	}
+}
+
+func TestRetiredCheckWritable(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	if err := CheckWritable(missing); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatal("checker created missing root", err)
+	}
+	for _, kind := range []string{"valid", "corrupt", "symlink", "directory"} {
+		t.Run(kind, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "retired.json")
+			var err error
+			switch kind {
+			case "valid":
+				err = os.WriteFile(path, []byte(`{"nextID":"successor","definition":"digest","head":"revision"}`), 0600)
+			case "corrupt":
+				err = os.WriteFile(path, []byte("private malformed material"), 0600)
+			case "symlink":
+				err = os.Symlink(filepath.Join(root, "absent"), path)
+			case "directory":
+				err = os.Mkdir(path, 0700)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := CheckWritable(root); !errors.Is(err, ErrRetired) || strings.Contains(err.Error(), root) || strings.Contains(err.Error(), "private") {
+				t.Fatalf("seal did not refuse safely: %v", err)
+			}
+		})
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(root+"/retired.json", []byte("broken"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openCanvas(root, nil, nil, "", nil, nil, nil, nil); !errors.Is(err, ErrRetired) {
+		t.Fatal("constructor proceeded past seal", err)
+	}
+}
+
+func TestSealQuiescenceAndReopen(t *testing.T) {
+	c, d, calls := definedFixture(t, nil)
+	id, err := c.Manual("writer", "", "Draft a fictional pilot.", "GM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := completed(t, c, id)
+	if _, err := c.Review(run.Proposal, "accept", "GM"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Verify(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	state, err := c.State()
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeLedger := retirementLedger(t, c)
+	next := ID()
+	var saved Archive
+	if err := c.SealForHistory(next, func(a Archive) error {
+		if err := CheckWritable(c.root); err != nil {
+			t.Fatal("sealed before archive persistence", err)
+		}
+		saved = a
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if saved.Revision != state.Head || len(saved.Documents) != len(state.Documents) {
+		t.Fatal("archive lost accepted revision/documents")
+	}
+	for path, doc := range saved.Documents {
+		content, err := c.space.Read(state.Head, path)
+		if err != nil || doc.Content != content || doc.Digest != fmt.Sprintf("%x", sha256.Sum256([]byte(content))) {
+			t.Fatalf("accepted bytes/digest mismatch: %s %v", path, err)
+		}
+	}
+	if !strings.Contains(saved.Documents["prd.json"].Content, "Proposed fictional pilot PRD") {
+		t.Fatal("archive substituted seeds for accepted bytes")
+	}
+	var public map[string]json.RawMessage
+	if err := json.Unmarshal(saved.State, &public); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"spacePath", "conversation", "role", "prospects", "input", "request", "preferences"} {
+		if _, exists := public[key]; exists {
+			t.Fatal("private state field archived", key)
+		}
+	}
+	var archived apiState
+	if err := json.Unmarshal(saved.State, &archived); err != nil || len(archived.Proposals) != 1 || len(archived.History) == 0 || len(archived.Runs) != 1 || archived.Runs[0].Proof == nil || archived.Runs[0].Proof.ModelCalls != 0 {
+		t.Fatal("recorded audit/proof metadata lost", err)
+	}
+	var seal struct{ NextID, Definition, Head string }
+	raw, err := os.ReadFile(filepath.Join(c.root, "retired.json"))
+	if err != nil || json.Unmarshal(raw, &seal) != nil || seal.NextID != next || seal.Definition != d.Digest || seal.Head != state.Head {
+		t.Fatal("seal binding missing", string(raw), err)
+	}
+	beforeCalls := calls.Load()
+	if _, err := c.Manual("writer", "", "Do not dispatch.", "GM"); err == nil {
+		t.Fatal("retired runtime dispatched")
+	}
+	if _, err := c.Review(run.Proposal, "reject", "GM"); err == nil {
+		t.Fatal("retired runtime reviewed")
+	}
+	if _, err := c.RequestAnnouncement(context.Background(), "announce", run.Proposal, "GM"); err == nil {
+		t.Fatal("retired runtime reserved native action")
+	}
+	if _, err := OpenDefined(c.root, c.space, c.client, c.address, d, contract.LocalBinder{}); !errors.Is(err, ErrRetired) {
+		t.Fatal("writable reopen permitted", err)
+	}
+	if _, err := c.State(); err != nil {
+		t.Fatal("retired state cannot be read before resource close", err)
+	}
+	if head, _ := c.space.Head(); head != state.Head || calls.Load() != beforeCalls || !bytes.Equal(beforeLedger, retirementLedger(t, c)) {
+		t.Fatal("retired mutation changed Git/native calls/journal")
+	}
+}
+
+func retirementLedger(t *testing.T, c *Canvas) []byte {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(c.root, "attempts.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func TestSealFailureLeavesRuntimeUsable(t *testing.T) {
+	for _, kind := range []string{"capture", "persist", "invalid-id"} {
+		t.Run(kind, func(t *testing.T) {
+			c, _, calls := definedFixture(t, nil)
+			before := retirementLedger(t, c)
+			original := c.space
+			next, invoked := ID(), false
+			if kind == "capture" {
+				c.space = retirementReadFailure{SharedSpace: original}
+			}
+			if kind == "invalid-id" {
+				next = "../escape"
+			}
+			err := c.SealForHistory(next, func(Archive) error { invoked = true; return errors.New("archive unavailable") })
+			c.space = original
+			if err == nil || invoked != (kind == "persist") || CheckWritable(c.root) != nil || c.ctx.Err() != nil || calls.Load() != 0 || !bytes.Equal(before, retirementLedger(t, c)) {
+				t.Fatal("failure consumed predecessor", err, invoked)
+			}
+			id, err := c.Manual("writer", "", "Still usable.", "GM")
+			if err != nil {
+				t.Fatal(err)
+			}
+			completed(t, c, id)
+			if calls.Load() != 1 {
+				t.Fatal("failure prevented subsequent native dispatch")
+			}
+		})
+	}
+}
+
+type retirementReadFailure struct{ sharedspace.SharedSpace }
+
+func (retirementReadFailure) Read(string, string) (string, error) {
+	return "", errors.New("capture unavailable")
+}
+
+func TestSealBusyWorkJournals(t *testing.T) {
+	c, _, calls := definedFixture(t, nil)
+	for _, status := range []string{"queued", "running", "uncertain"} {
+		t.Run("attempt-"+status, func(t *testing.T) {
+			c.data.Attempts = []attempt{{Run: Run{Status: status}}}
+			assertSealBusy(t, c)
+			c.data.Attempts = nil
+		})
+		t.Run("question-"+status, func(t *testing.T) {
+			c.conversation.Entries = []conversationRecord{{ConversationMessage: ConversationMessage{Kind: "question", Status: status}}}
+			assertSealBusy(t, c)
+			c.conversation.Entries = nil
+		})
+	}
+	for _, status := range []string{"pending", "uncertain"} {
+		c.data.Recoveries = []resumeAction{{Status: status}}
+		assertSealBusy(t, c)
+	}
+	c.data.Recoveries = nil
+	for _, op := range []announcementOperation{{Stage: "pending", Phase: "create"}, {Stage: "uncertain", Phase: "approve"}, {Stage: "idle", Phase: "continue", EffectReserved: true}, {Stage: "idle", Phase: "park"}} {
+		c.data.Announcements = []announcementOperation{op}
+		assertSealBusy(t, c)
+	}
+	c.data.Announcements = nil
+	if calls.Load() != 0 {
+		t.Fatal("busy inspection dispatched model")
+	}
+}
+
+func assertSealBusy(t *testing.T, c *Canvas) {
+	t.Helper()
+	before := retirementLedger(t, c)
+	head, _ := c.space.Head()
+	called := false
+	if err := c.SealForHistory(ID(), func(Archive) error { called = true; return nil }); err == nil || called || c.ctx.Err() != nil || CheckWritable(c.root) != nil {
+		t.Fatal("busy runtime sealed/persisted/stopped", err)
+	}
+	if now, _ := c.space.Head(); now != head || !bytes.Equal(before, retirementLedger(t, c)) {
+		t.Fatal("refusal changed predecessor")
+	}
+}
+
+func TestSealUndecidedAndStaleProposals(t *testing.T) {
+	c, _, _ := definedFixture(t, nil)
+	id, err := c.Manual("writer", "", "Proposal requiring a decision.", "GM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := completed(t, c, id)
+	assertSealBusy(t, c)
+	if _, err := c.space.Ingest("feedback/initial.json", `{"team":"Northwind","feedback":"New evidence"}`, "GM"); err != nil {
+		t.Fatal(err)
+	}
+	assertSealBusy(t, c)
+	if _, err := c.Review(run.Proposal, "reject", "GM"); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SealForHistory(ID(), func(Archive) error { return nil }); err != nil {
+		t.Fatal("rejected proposal prevented retirement", err)
+	}
+}
+
+func TestSealFlowReviewAndTerminalSnapshot(t *testing.T) {
+	c, calls := workflowFixture(t, false, nil)
+	f := startWorkflow(t, c, "retirement", 12)
+	f = waitWorkflow(t, c, f.ID, "review")
+	assertSealBusy(t, c)
+	for i := 0; i < 3; i++ {
+		completed(t, c, f.Attempt)
+		if _, err := c.Review(f.Proposal, "accept", "reviewer"); err != nil {
+			t.Fatal(err)
+		}
+		if i < 2 {
+			f = waitWorkflow(t, c, f.ID, "review")
+		}
+	}
+	waitWorkflow(t, c, f.ID, "complete")
+	var saved Archive
+	if err := c.SealForHistory(ID(), func(a Archive) error { saved = a; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	var panel flowPanelState
+	if json.Unmarshal(saved.Flows, &panel) != nil || len(panel.Runs) != 1 || panel.Runs[0].State != "complete" || len(panel.Runs[0].Inputs) != 0 || panel.Head != saved.Revision {
+		t.Fatal("terminal flow lost/slim projection violated", string(saved.Flows))
+	}
+	var fields struct{ Runs []map[string]json.RawMessage }
+	if err := json.Unmarshal(saved.Flows, &fields); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"commands", "inputBytes", "executionOwner", "inputs", "feedback"} {
+		if _, exists := fields.Runs[0][key]; exists {
+			t.Fatal("private flow journal archived", key)
+		}
+	}
+	before := retirementLedger(t, c)
+	if _, err := c.StartFlow(context.Background(), FlowStart{Flow: "release", RequestKey: "after", Role: "GM", Inputs: json.RawMessage(`{"topic":"no dispatch"}`), AgentRuns: 12}); err == nil {
+		t.Fatal("retired runtime started flow")
+	}
+	if _, err := c.RetryFlow(context.Background(), FlowRetry{Run: f.ID, Attempt: f.Attempt, RequestKey: "after", Role: "GM"}); err == nil {
+		t.Fatal("retired runtime retried flow")
+	}
+	if calls.Load() != 3 || !bytes.Equal(before, retirementLedger(t, c)) {
+		t.Fatal("retired flow mutated")
+	}
+}
+
+func TestSealNativeAnnouncementMustConclude(t *testing.T) {
+	c, _, calls := definedFixtureAt(t, actionDefinitionFixture(t), nil)
+	p := acceptedAnnouncement(t, c, "# Local simulated announcement\n")
+	id, err := c.RequestAnnouncement(context.Background(), "announce", p.ID, "GM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSealBusy(t, c)
+	v := confirmedAnnouncement(t, c, id)
+	if err := c.DecideAnnouncement(context.Background(), id, "GM", false, v.Confirmation); err != nil {
+		t.Fatal(err)
+	}
+	assertSealBusy(t, c) // A decision alone is not a native conclusion.
+	v = confirmedAnnouncement(t, c, id)
+	if err := c.ContinueAnnouncement(context.Background(), id, "GM", v.Confirmation); err != nil {
+		t.Fatal(err)
+	}
+	v = confirmedAnnouncement(t, c, id)
+	if !v.Concluded || v.Status != "denied" {
+		t.Fatal("fixture lacks real native conclusion", v)
+	}
+	if err := c.SealForHistory(ID(), func(Archive) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 0 {
+		t.Fatal("retirement invoked model")
+	}
+}
+
+func TestSealArchiveBoundAndFinishingWorker(t *testing.T) {
+	c, _, calls := definedFixture(t, nil)
+	original := c.space
+	c.space = retirementOversize{SharedSpace: original}
+	assertSealBusy(t, c)
+	c.space = original
+	// A published proposal can still have a finishing worker. Status alone
+	// must not let retirement race that worker's final journal update.
+	c.data.Attempts = []attempt{{Run: Run{Status: "proposed"}}}
+	assertSealBusy(t, c)
+	c.data.Attempts = nil
+	if calls.Load() != 0 {
+		t.Fatal("capture/refusal invoked native model")
+	}
+}
+
+type retirementOversize struct{ sharedspace.SharedSpace }
+
+func (retirementOversize) Read(string, string) (string, error) {
+	return strings.Repeat("x", 64<<20), nil
+}
+
+func TestSealSerializesDispatch(t *testing.T) {
+	c, _, calls := definedFixture(t, nil)
+	entered, release, sealed := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		sealed <- c.SealForHistory(ID(), func(Archive) error { close(entered); <-release; return nil })
+	}()
+	<-entered
+	dispatched := make(chan error, 1)
+	go func() { _, err := c.Manual("writer", "", "Race with seal.", "GM"); dispatched <- err }()
+	select {
+	case err := <-dispatched:
+		t.Fatal("dispatch crossed archive persistence boundary", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	if err := <-sealed; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-dispatched; err == nil || calls.Load() != 0 {
+		t.Fatal("seal lost dispatch race", err)
 	}
 }

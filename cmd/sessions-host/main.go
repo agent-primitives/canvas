@@ -122,6 +122,11 @@ func serve(ctx context.Context, args []string, output io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("invalid state path: %w", err)
 	}
+	for _, path := range []string{private, filepath.Join(private, "canvas")} {
+		if err := canvas.CheckWritable(path); err != nil {
+			return err
+		}
+	}
 	if err := demostate.PreflightGeneric(private); err != nil {
 		return err
 	}
