@@ -22,7 +22,16 @@ directories, including the journal and immutable contract archive. Preserve that
 backup separately before starting the new binary. Do not copy only a live SQLite
 main file: uncheckpointed changes may be in its WAL.
 
-Opening a journal written by the prior Canvas pin, `9a3d755c1072`, migrates its
+Journals written by the fork pin `ce018b2daa0f` are already SQLite schema 5
+and open with this upstream pin without migration. Upstream Sessions' controller
+now verifies the journal hash chain before Exec, Replay and Resume and refuses a
+broken chain. The Exec and Resume RPCs surface that failure as gRPC `DataLoss`.
+The read-only Replay RPC still streams stored records without checking them;
+Canvas checks replay hashes itself, and its Verify diagnostic rejects a broken
+chain with `FailedPrecondition`. These checks do not repair the journal or
+replace a stopped-state backup.
+
+Opening a journal written by the earlier Canvas pin, `9a3d755c1072`, migrates its
 SQLite schema from version 1 to version 5, including the harness registry,
 approval-reporting and authentication schemas. Migration alone does not authorize or
 continue an approval; the separate local action requires explicit inspection,
@@ -43,6 +52,16 @@ The regression copies the database before opening it, checks schema 1 → 5 and
 byte-identical existing event rows/hashes/fences, preserves lineage, and verifies
 completed replay and explicit Resume without a provider call. This is bounded
 upgrade evidence, not a general journal-repair or rollback qualification.
+
+The fork-pin regression uses `internal/sessionhost/testdata/ce018b2-native.db`,
+written through Canvas at `58be923` with its normal `ce018b2daa0f` fork dependencies.
+It contains one completed native question turn and one unanswered native model
+intent in separate sessions, using only scripted fictional provider results. The
+test records the generation procedure, checks schema 5 and unchanged historical
+event rows/hashes/fences, and verifies both chains. Completed reconstruction and
+Resume make zero provider calls; startup and read-only verification never reissue
+the unanswered intent. Explicitly resuming that intent makes exactly one provider
+call; subsequent Resume and verification make no extra calls.
 
 ## Substrate lifecycle and transport
 
@@ -71,9 +90,14 @@ An explicit runtime Resume of a modern unanswered model intent reissues the
 recorded model request; it may be charged again. Another explicit Resume after a
 provider failure can reissue it again. Restart and read-only verification do not
 invoke the provider; a recorded completion is replayed without another call.
-Provider error details remain sanitized. Producer-facing confirmation and tool
-refusal are separate Canvas recovery responsibilities, not guarantees conferred
-by the runtime API itself.
+Provider error details remain sanitized. For legacy turns, upstream's OpenAI
+adapter now rejects responses including a nonempty refusal string or a
+`tool_calls` finish reason with no tool calls, returning a sanitized provider
+failure instead of the fork's empty success. Native profile-4 completions already
+had Canvas's stricter finish/refusal checks. These responses do not establish a
+completed turn; an explicit Resume may reissue the unanswered request as described
+above. Producer-facing confirmation and tool refusal are separate Canvas recovery
+responsibilities, not guarantees conferred by the runtime API itself.
 
 ## Qualification boundary
 

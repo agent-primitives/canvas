@@ -221,6 +221,34 @@ func TestGenericCompletionRequiresNativeStrictFormat(t *testing.T) {
 	}
 }
 
+// The upstream adapter must not turn refusals or empty tool finishes into an
+// empty legacy success, or expose provider-controlled text through the error.
+func TestLegacyCompletionRefusalAndEmptyToolCallsAreSanitized(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+	}{
+		{"refusal", `{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":null,"refusal":"provider-private-refusal"}}]}`},
+		{"empty-tool-calls", `{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[]}}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			provider, err := compatible(endpoint{label: "fixture", base: srv.URL, model: "legacy"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := provider(t.Context(), api.ModelRequest{Model: "legacy", Messages: []api.Message{*api.TextMessage("user", "legacy")}, Params: map[string]string{"max_tokens": "700", "temperature": "0.2"}})
+			if err == nil || err.Error() != "model provider failed" || len(got.Message.Parts) != 0 || calls.Load() != 1 {
+				t.Fatalf("legacy completion not sanitized: response=%+v err=%v attempts=%d", got, err, calls.Load())
+			}
+		})
+	}
+}
+
 // Native parity must not turn legacy profiles into strict-schema-only clients.
 func TestGenericCompletionLegacyProviderUnchanged(t *testing.T) {
 	for _, reasoning := range []bool{false, true} {

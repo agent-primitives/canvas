@@ -29,8 +29,8 @@ func validateDocumentFormat(raw string) error {
 	return nil
 }
 
-// The unary adapter discards finish/refusal metadata. Check the bounded complete
-// response before handing it over; document JSON/schema validation remains Canvas's job.
+// The unary adapter does not require a complete, nonempty stop response. Check
+// the bounded response first; document JSON/schema validation remains Canvas's job.
 func validateDocumentCompletion(raw []byte) error {
 	var response struct {
 		Choices []struct {
