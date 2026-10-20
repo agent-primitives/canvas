@@ -1,0 +1,23 @@
+# Allow only authored product source; runtime/workflow scratch never enters builds.
+**
+!go.mod
+!go.sum
+!model.lock.json
+!model.config.json
+!cmd/
+!cmd/**
+!internal/
+!internal/**
+!examples/
+!examples/**
+!web/
+!web/**
+!deploy/
+!deploy/Dockerfile
+**/*_test.go
+.git
+.state*
+.bin
+node_modules
+**/node_modules
+**/__pycache__

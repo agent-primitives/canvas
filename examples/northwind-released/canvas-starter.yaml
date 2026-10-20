@@ -1,0 +1,58 @@
+apiVersion: canvas.local/v1alpha2
+kind: Canvas
+metadata:
+  name: northwind-authoring-starter
+  title: Manual-only Northwind authoring starter
+spec:
+  documents:
+    brief:
+      path: brief.json
+      schema: schemas/brief.json
+      title: Fictional project brief
+    feedback:
+      path: feedback/*.json
+      schema: schemas/feedback.json
+      title: Fictional observations
+    prd:
+      path: prd.json
+      schema: schemas/prd.json
+      title: Proposed PRD
+    review:
+      path: review.json
+      schema: schemas/review.json
+      title: Independent review
+    announcement:
+      path: announcement.md
+      title: Draft announcement — no action declared
+  agents:
+    writer:
+      name: PRD writer
+      suite:
+        ref: sha256:b9513f8f72b41ea36fde2179da726f62d1d28412402621023cfc0f23cadb3544
+        layout: layouts/writer
+        member: writer
+        platform: linux/amd64
+      read: [brief, feedback, prd]
+      propose: [prd, announcement]
+    reviewer:
+      name: Independent reviewer
+      suite:
+        ref: sha256:6ea51f953d1d51be7316fb155cbce783e7010afb43169e479f44e0cce2783ccc
+        layout: layouts/reviewer
+        member: reviewer
+        platform: linux/amd64
+      read: [brief, feedback, prd]
+      propose: [review]
+  seed:
+    brief.json: seeds/brief.json
+    feedback/initial.json: seeds/feedback-initial.json
+    prd.json: seeds/prd.json
+    review.json: seeds/review.json
+    announcement.md: seeds/announcement.md
+  triggers:
+    - name: draft-prd
+      type: manual
+      agent: writer
+    - name: review-accepted-prd
+      type: manual
+      agent: reviewer

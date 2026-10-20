@@ -1,0 +1,1 @@
+{"id":"writer","instructions":{"descriptor":{"digest":"sha256:dd1ac2e25281caf7fcbfea924b0af9032ed847bf8473859998d84be0669beb86","mediaType":"text/markdown; charset=utf-8","size":2561},"path":"instructions/writer.md"},"mediaType":"application/vnd.agentsuite.agent.v1+json","model":{"model":"gpt-5.6-terra","protocol":"openai-compatible"},"schemaVersion":"1.0.0-draft"}

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "team": {
+      "type": "string",
+      "minLength": 1
+    },
+    "feedback": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "team",
+    "feedback"
+  ]
+}

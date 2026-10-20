@@ -1,0 +1,1 @@
+{"id":"reviewer","instructions":{"descriptor":{"digest":"sha256:8ac0c72dd3f443c82823f4457d485b347d78631064707dbd7351623edea71178","mediaType":"text/markdown; charset=utf-8","size":2344},"path":"instructions/reviewer.md"},"mediaType":"application/vnd.agentsuite.agent.v1+json","model":{"model":"gpt-5.6-terra","protocol":"openai-compatible"},"schemaVersion":"1.0.0-draft"}

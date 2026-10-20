@@ -1,0 +1,1 @@
+{"id":"reviewer","instructions":{"descriptor":{"digest":"sha256:2d1b8579572e369b81c9312527182df058be5be31e5c21cc3dad2a23dd8bf52a","mediaType":"text/markdown; charset=utf-8","size":1518},"path":"instructions/reviewer.md"},"mediaType":"application/vnd.agentsuite.agent.v1+json","model":{"model":"qwen3:8b","protocol":"openai-compatible"},"schemaVersion":"1.0.0-draft"}
