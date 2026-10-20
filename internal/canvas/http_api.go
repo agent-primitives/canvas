@@ -43,6 +43,7 @@ type apiState struct {
 }
 
 func (c *Canvas) registerAPIRoutes(mux *http.ServeMux, generic bool) {
+	c.registerFlowRoutes(mux)
 	handle := func(pattern string, next http.HandlerFunc) {
 		mux.HandleFunc(pattern, func(w http.ResponseWriter, r *http.Request) {
 			if generic && c.definition == nil {
