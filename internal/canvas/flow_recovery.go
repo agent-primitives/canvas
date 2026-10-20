@@ -248,7 +248,20 @@ func (c *Canvas) ReconcileFlow(ctx context.Context, q FlowMaintenance) (FlowRun,
 		if !n.Settled {
 			return f, ErrFlowConflict
 		}
-		e = c.setFlow(f.ID, "cancelled", "Cancellation settled from bound native execution; no late output eligible.")
+		c.mu.Lock()
+		live := c.flowLocked(f.ID)
+		live.State = "cancelled"
+		live.Reason = "Cancellation settled from bound native execution; no late output eligible."
+		settled := c.findLocked(a.ID)
+		settled.Status = "failed"
+		settled.FlowStage = "completed"
+		settled.Error = live.Reason
+		e = c.saveLocked()
+		if e != nil {
+			live.State = "uncertain"
+			c.persistenceFailureLocked(nil)
+		}
+		c.mu.Unlock()
 		out, _ := c.GetFlow(context.Background(), f.ID)
 		return out, e
 	}
@@ -261,8 +274,15 @@ func (c *Canvas) ReconcileFlow(ctx context.Context, q FlowMaintenance) (FlowRun,
 		live := c.flowLocked(f.ID)
 		live.State = "paused"
 		live.Reason = validation.Error()
-		c.findLocked(a.ID).FlowStage = "completed"
+		settled := c.findLocked(a.ID)
+		settled.FlowStage = "completed"
+		settled.Status = "failed"
+		settled.Error = validation.Error()
 		e = c.saveLocked()
+		if e != nil {
+			live.State = "uncertain"
+			c.persistenceFailureLocked(nil)
+		}
 		c.mu.Unlock()
 		out, _ := c.GetFlow(context.Background(), f.ID)
 		return out, e
@@ -328,6 +348,7 @@ func (c *Canvas) ReconcileFlow(ctx context.Context, q FlowMaintenance) (FlowRun,
 		live.Proposal = ""
 		live.Reason = "Reconciled recorded review; no next step dispatched."
 		rec.ReconciledBy = who
+		c.findLocked(a.ID).Status = "proposed"
 		c.findLocked(a.ID).FlowStage = "completed"
 		e = c.saveLocked()
 		if e != nil {
@@ -446,10 +467,21 @@ func (c *Canvas) reconcileFlowActionLocked(ctx context.Context, r flowRunRecord,
 		return r.FlowRun, e
 	}
 	if op.EffectReserved || op.Stage == "pending" || op.Stage == "uncertain" {
-		if !v.Concluded {
+		if v.Concluded {
+			e = c.finishFlowAction(ctx, op)
+			out, _ := c.GetFlow(context.Background(), r.ID)
+			return out, e
+		}
+		// Parking and approval cannot execute the tool. Only a durable known
+		// phase plus its exact native outcome can lift this stage fence; never
+		// infer that an unknown legacy operation or Continue had no effect.
+		parked := (op.Phase == "create" || op.Phase == "park") && op.Decision == nil && v.Status == "pending-approval"
+		decided := op.Phase == "approve" && op.Decision != nil && ((op.Decision.Approved && v.Status == "approved") || (!op.Decision.Approved && v.Status == "denied"))
+		if op.EffectReserved || (!parked && !decided) {
 			return r.FlowRun, ErrFlowConflict
 		}
-		e = c.finishFlowAction(ctx, op)
+		op.Stage = "idle"
+		e = c.saveAnnouncement(op)
 		out, _ := c.GetFlow(context.Background(), r.ID)
 		return out, e
 	}

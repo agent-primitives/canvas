@@ -61,6 +61,9 @@ type announcementDecision struct {
 	Reason   string
 }
 type announcementOperation struct {
+	// Phase records the last native mutation intent independently of Stage.
+	// An unknown legacy phase is never treated as proof of a no-effect RPC.
+	Phase          string                  `json:"phase,omitempty"`
 	FlowGeneration uint64                  `json:"flowGeneration,omitempty"`
 	Revoked        bool                    `json:"revoked,omitempty"`
 	EffectReserved bool                    `json:"effectReserved,omitempty"`
@@ -199,7 +202,7 @@ func (c *Canvas) requestAnnouncementLocked(ctx context.Context, action, proposal
 	if c.service != nil {
 		c.data.ExecutionOwner = owner
 	}
-	op := announcementOperation{Snapshot: snapshot, Stage: "pending", ExecutionOwner: owner, RequestedBy: requestedBy, FlowRun: flowID}
+	op := announcementOperation{Snapshot: snapshot, Stage: "pending", Phase: "create", ExecutionOwner: owner, RequestedBy: requestedBy, FlowRun: flowID}
 	if flowID != "" {
 		f := c.flowLocked(flowID)
 		if f == nil || f.Accepted[a.Document] != proposal {
@@ -247,6 +250,7 @@ func (c *Canvas) requestAnnouncementLocked(ctx context.Context, action, proposal
 		_ = c.saveAnnouncement(op)
 		return snapshot.Operation, errAnnouncement
 	}
+	op.Phase = "park"
 	if c.saveAnnouncement(op) != nil {
 		return snapshot.Operation, errAnnouncement
 	}
@@ -556,6 +560,7 @@ func (c *Canvas) DecideAnnouncement(ctx context.Context, id, role string, approv
 	}
 	previousDecision := op.Decision
 	op.Decision = &decision
+	op.Phase = "approve"
 	op.Stage = "pending"
 	if err := c.saveAnnouncement(op); err != nil {
 		return err
@@ -613,6 +618,10 @@ func (c *Canvas) resumeAnnouncement(ctx context.Context, id, role string, confir
 	}
 	if recover && v.Confirmation.ExecutionID == "" && v.Confirmation.Head != op.InitialHead {
 		return errAnnouncement
+	}
+	op.Phase = "continue"
+	if recover {
+		op.Phase = "recover"
 	}
 	op.Stage = "pending"
 	if op.FlowRun != "" && !cleanup {
