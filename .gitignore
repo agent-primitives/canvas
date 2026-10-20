@@ -426,3 +426,13 @@ FodyWeavers.xsd
 
 # Official VS Code C# Dev Kit Extension exclusion
 #*.lscache
+
+# Canvas local state and development tools
+.state/
+/model.config.local.json
+.venv/
+.bin/
+node_modules/
+playwright-report/
+test-results/
+__pycache__/

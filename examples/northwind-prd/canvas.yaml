@@ -1,0 +1,77 @@
+apiVersion: canvas.local/v1alpha2
+kind: Canvas
+metadata:
+  name: northwind-prd
+  title: Northwind fictional PRD
+spec:
+  documents:
+    brief:
+      path: brief.json
+      schema: schemas/brief.json
+      title: Fictional project brief
+    feedback:
+      path: feedback/*.json
+      schema: schemas/feedback.json
+      title: Fictional observations
+    prd:
+      path: prd.json
+      schema: schemas/prd.json
+      title: Proposed PRD
+    review:
+      path: review.json
+      schema: schemas/review.json
+      title: Independent review
+    announcement:
+      path: announcement.md
+      title: Simulated announcement — never sent
+  agents:
+    writer:
+      name: PRD writer
+      suite:
+        directory: suites/writer
+        artifact: layouts/writer
+        digest: sha256:5c2230b6869821a57b2faea4db3f811fdf4be0623b71bbe676d75d7905005375
+        member: writer
+      read: [brief, feedback, prd]
+      propose: [prd, announcement]
+    reviewer:
+      name: Independent reviewer
+      suite:
+        directory: suites/reviewer
+        artifact: layouts/reviewer
+        digest: sha256:101df94e7cfd582d3032850a5945570bbf813e6334b0708a751cfc7199b98513
+        member: reviewer
+      read: [brief, feedback, prd]
+      propose: [review]
+  seed:
+    brief.json: seeds/brief.json
+    feedback/initial.json: seeds/feedback-initial.json
+    prd.json: seeds/prd.json
+    review.json: seeds/review.json
+    announcement.md: seeds/announcement.md
+  actions:
+    announce:
+      name: Simulated announcement
+      kind: simulated-announcement
+      document: announcement
+  triggers:
+    - name: draft-prd
+      type: manual
+      agent: writer
+    - name: review-accepted-prd
+      type: manual
+      agent: reviewer
+    - name: new-feedback
+      type: file-added
+      agent: writer
+      path: feedback/*.json
+  people:
+    - id: GM
+      name: Morgan
+      title: Fictional product manager
+    - id: coach
+      name: Casey
+      title: Fictional engineering lead
+    - id: owner
+      name: Avery
+      title: Fictional product sponsor

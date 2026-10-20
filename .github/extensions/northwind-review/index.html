@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Northwind document review</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<header><p class="eyebrow">Canvas engine · local demonstration</p><h1>Northwind review</h1><p id="engine-description">Deterministic fixture. Nothing is sent or published.</p></header>
+<main>
+<p id="identity" class="notice">Identity: unauthenticated (prototype). These controls do not establish human-only authority.</p>
+<div class="toolbar"><button id="draft">New writer draft</button><button id="refresh" class="secondary">Refresh connection</button></div>
+<p id="connection" role="status" aria-live="polite">Connecting to the local engine…</p>
+<p id="status" role="status" aria-live="polite" aria-atomic="true"></p>
+<p id="offline" class="notice" hidden>Last known record only. Decision controls are unavailable until a successful inspection. Nothing is automatically retried or resumed.</p>
+<div id="empty"><h2>Start with a document draft</h2><p>New writer draft creates a fictional PRD and announcement for you to review as one proposal. Accepting documents does not approve or run an action.</p></div>
+<div id="review" hidden>
+<label for="proposal">Draft to review</label><select id="proposal"><option value="">No proposals yet</option></select>
+<section id="document-stage" aria-labelledby="documents-title"><h2 id="documents-title">1. Review document changes</h2>
+<p id="document-status"></p><p id="document-reviewer" hidden></p><p id="scope"></p>
+<details id="completed-documents"><summary id="documents-summary">Review all changed documents</summary><div id="documents"></div></details>
+<div id="document-decision"><label class="confirm"><input type="checkbox" id="document-confirm" aria-describedby="document-help">I reviewed every changed document in this proposal.</label>
+<div class="actions"><button id="accept" aria-describedby="document-help">Accept documents</button><button id="reject" class="secondary" aria-describedby="document-help">Reject documents</button></div></div>
+<p id="document-help" class="hint">Review and confirm every changed document. Acceptance updates documents only. No action is approved or run.</p>
+</section>
+<section id="action-stage" aria-labelledby="action-title" hidden><h2 id="action-title">2. Review the simulated action</h2>
+<p id="action-status"></p><p id="action-reviewer" hidden></p><button id="request" aria-describedby="action-help">Request action approval</button>
+<p id="warning" class="notice" hidden></p><pre id="snapshot" tabindex="0" aria-label="Exact accepted announcement snapshot" hidden></pre>
+<div id="action-decision"><label class="confirm"><input type="checkbox" id="action-confirm" aria-describedby="action-help"><span id="action-confirm-label">I reviewed this exact accepted snapshot and request.</span></label>
+<div class="actions"><button id="approve" aria-describedby="action-help">Record action approval</button><button id="deny" class="secondary" aria-describedby="action-help">Record action denial</button><button id="continue" aria-describedby="action-help">Continue simulation</button></div></div>
+<p id="action-help" class="hint"></p>
+<details id="action-evidence"><summary>Snapshot and native evidence</summary><h3>Human decision and exact request</h3><pre id="evidence" tabindex="0" aria-label="Native action evidence">No action requested.</pre>
+<h3>Replay integrity</h3><p id="replay-help" class="hint"></p><button id="verify-action" class="secondary" aria-describedby="replay-help">Verify action replay</button><p id="action-proof" role="status"></p></details>
+</section>
+</div>
+<details id="run-evidence"><summary>Run evidence and diagnostics</summary><h3>Replay integrity</h3><button id="verify" class="secondary">Verify draft replay</button><p id="draft-proof" role="status"></p>
+<details id="release-evidence" hidden><summary>Released suite version and evaluation</summary><div id="suite-evidence"></div></details>
+<p id="meter" class="hint"></p></details>
+</main><script type="module" src="/app.js"></script>
+</body></html>

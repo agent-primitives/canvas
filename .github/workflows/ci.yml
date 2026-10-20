@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: '1.27.2'
+          cache: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '26'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      # The same make targets developers run, so local and CI checks don't drift.
+      - name: Check formatting
+        run: make fmt-check
+      - name: Install browser test tools
+        run: |
+          npm install --ignore-scripts --no-fund --prefix "$RUNNER_TEMP/canvas-browser" playwright@1.63.0
+          npm audit --prefix "$RUNNER_TEMP/canvas-browser" --audit-level=high
+          node "$RUNNER_TEMP/canvas-browser/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Test (Go race and vet, JavaScript, Python launchers)
+        env:
+          PLAYWRIGHT_MODULE: ${{ runner.temp }}/canvas-browser/node_modules/playwright
+        run: make test
+      - name: Build
+        run: make build

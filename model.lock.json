@@ -1,0 +1,10 @@
+{
+  "image": "ollama/ollama@sha256:03eaa1581455ba16e7c954d799e4f44996b60ae668261acd00a0e80a241ed720",
+  "imageVersion": "0.11.8",
+  "model": "qwen3:8b",
+  "manifestDigest": "sha256:500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41",
+  "baseURL": "http://127.0.0.1:11434",
+  "container": "canvas-draft-room-ollama",
+  "volume": "canvas-draft-room-models",
+  "ownerLabel": "canvas.owner=draft-room"
+}

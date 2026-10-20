@@ -1,0 +1,36 @@
+apiVersion: canvas.local/v1alpha2
+kind: Canvas
+metadata:
+  name: release-review
+  title: envctl 0.9 release review (fictional)
+spec:
+  documents:
+    inputs: {path: inputs.json, schema: schemas/inputs.json, title: Frozen fictional release sources}
+    notes: {path: notes.json, schema: schemas/notes.json, title: Release notes}
+    review: {path: review.json, schema: schemas/review.json, title: Compatibility critique (advice)}
+    announcement: {path: announcement.md, title: Simulated announcement draft}
+  agents:
+    writer:
+      name: Release notes writer
+      suite: {ref: 'sha256:661a3b10f3f09e8fb7f2dc71a0df4694200222451cf39da27a3dbde7f38b5c1f', layout: layouts/writer, member: writer, platform: linux/amd64}
+      read: [inputs, notes, review, announcement]
+      propose: [notes, announcement]
+    reviewer:
+      name: Compatibility reviewer
+      suite: {ref: 'sha256:60c3d5d677bf60ffe470a2792df94022aa51fe19e8446cf953f1576f32dbd15b', layout: layouts/reviewer, member: reviewer, platform: linux/amd64}
+      read: [inputs, notes, review, announcement]
+      propose: [review]
+  seed:
+    inputs.json: seeds/inputs.json
+    notes.json: seeds/notes.json
+    review.json: seeds/review.json
+    announcement.md: seeds/announcement.md
+  triggers:
+    - {name: draft, type: manual, agent: writer}
+    - {name: critique, type: manual, agent: reviewer}
+  actions:
+    announce: {name: Simulate release announcement, kind: simulated-announcement, document: announcement}
+  people:
+    - {id: GM, name: Local reviewer, title: 'local, unauthenticated'}
+    - {id: coach, name: Local adviser, title: 'local, unauthenticated'}
+    - {id: owner, name: Local observer, title: 'local, unauthenticated'}

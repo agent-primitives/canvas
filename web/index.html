@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Canvas · Document review</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#review">Skip to decision</a>
+  <a class="skip-link" href="#conversation">Skip to conversation</a>
+  <header class="topbar">
+    <button id="navigation-toggle" class="icon-button" type="button" aria-label="Navigation" title="Navigation" aria-controls="navigation" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6h14M5 12h14M5 18h14"/></svg></button>
+    <div class="brand"><strong>Canvas</strong><span id="room-brand">/ Canvas</span></div>
+    <div class="header-controls">
+      <div class="role-control"><label for="role">Demo persona</label><select id="role" aria-describedby="persona-help"><option value="GM">Loading personas…</option></select><span id="persona-help" class="visually-hidden">Attribution only, not sign-in or authorization.</span></div>
+      <details id="new-menu" class="new-menu"><summary>New…</summary><div class="menu"><button id="generic-run-toggle" type="button" aria-controls="generic-run-panel" aria-expanded="false" hidden>New agent run</button><button id="generic-input-toggle" type="button" aria-controls="generic-input-panel" aria-expanded="false" hidden>Add source file</button></div></details>
+      <button id="evidence-toggle" class="icon-button" type="button" aria-label="Evidence panel" title="Evidence panel" aria-controls="evidence-panel" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h9l4 4v14H8zM17 3v5h4M4 7v14M11 12h7M11 16h7"/></svg></button>
+    </div>
+  </header>
+  <div id="notice" class="notice" role="status" aria-live="polite" hidden></div>
+  <div id="connection" class="connection" role="status">Connecting to the local workspace…</div>
+  <div id="poll-status" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+  <section id="request-strip" class="request-strip" aria-label="Pending work"></section>
+  <h1 id="room-title" class="room-title">Document review</h1>
+  <p id="suite-status" class="muted" hidden></p>
+  <p id="provider-guidance" class="muted" hidden></p>
+  <main id="workspace" class="workspace">
+    <div class="focus-room">
+      <section id="review" class="review" aria-label="Document review" tabindex="-1">
+        <div id="document-panel" role="tabpanel" class="document-panel"><p class="muted">Loading accepted documents…</p></div>
+      </section>
+      <section id="conversation" class="conversation" aria-labelledby="conversation-title" tabindex="-1">
+        <header class="panel-heading"><h2 id="conversation-title">Room conversation</h2><span id="conversation-meta" class="visually-hidden">Shared comments and recorded session summaries</span></header>
+        <div id="conversation-content" class="conversation-content"></div>
+        <div class="composer-area">
+          <form id="room-form" class="room-composer">
+            <label for="room-request" class="visually-hidden">Comment or ask about this decision</label>
+            <textarea id="room-request" name="request" rows="1" maxlength="2000" required placeholder="Comment or ask about this decision…" aria-describedby="room-context room-help"></textarea>
+            <div class="composer-expanded">
+              <p id="room-context" class="muted">Select a recorded session to ask its agent why.</p>
+              <div class="room-actions"><button id="room-post" type="submit" class="primary" data-mutation disabled>Post to room</button><button id="room-ask" type="button" data-mutation disabled>Ask agent why</button></div>
+              <details class="composer-help"><summary>Comment or question?</summary><p id="room-help" class="muted">Comments are shared across sessions and never invoke an agent. Ask agent why uses the selected recorded session, read-only; it changes no documents.</p></details>
+            </div>
+          </form>
+          <section id="announcement-panel" class="announcement-panel" aria-labelledby="announcement-title" hidden>
+            <h3 id="announcement-title">Local publication</h3>
+            <p class="muted">Embedded host only. Approval records a decision; Continue runs the local simulation. Nothing is sent or published.</p>
+            <label for="announcement-action">Declared action</label><select id="announcement-action"></select>
+            <label for="announcement-proposal">Accepted proposal changing this document</label><select id="announcement-proposal"></select>
+            <button id="announcement-request" type="button">Request approval</button>
+            <label for="announcement-operation">Inspect operation</label><select id="announcement-operation"><option value="">Choose an operation…</option></select>
+            <button id="announcement-refresh" type="button" hidden>Inspect again</button>
+            <p id="announcement-status" class="muted" role="status" aria-live="polite" tabindex="-1"></p>
+            <div id="announcement-inspection" hidden>
+              <dl id="announcement-identity" class="announcement-identity"></dl>
+              <p id="announcement-warning" class="announcement-warning" hidden></p>
+              <label for="announcement-content">Exact pinned content</label><pre id="announcement-content" tabindex="0" aria-label="Exact pinned content"></pre>
+              <p id="announcement-receipt" class="announcement-receipt" hidden></p>
+              <details id="announcement-receipt-detail" hidden><summary>Exact recorded receipt</summary><pre id="announcement-receipt-content"></pre></details>
+              <label class="announcement-confirm-label" for="announcement-confirm"><input id="announcement-confirm" type="checkbox" autocomplete="off" aria-describedby="announcement-warning announcement-consequence">I inspected this exact snapshot and confirm the next action.</label>
+              <p id="announcement-consequence" class="muted"></p>
+              <div class="announcement-buttons">
+                <button id="announcement-approve" type="button" disabled>Record approval</button>
+                <button id="announcement-deny" type="button" disabled>Record denial</button>
+                <button id="announcement-continue" type="button" disabled hidden>Continue simulation</button>
+                <button id="announcement-recover" type="button" disabled hidden>Recover</button>
+                <button id="announcement-abandon" type="button" disabled hidden>Abandon local operation</button>
+              </div>
+            </div>
+          </section>
+          <div id="generic-run-panel" class="assessment-panel" hidden>
+            <header class="panel-heading"><h3>New agent run</h3><button id="generic-run-close" type="button" class="tertiary">Close run</button></header>
+            <form id="generic-run-form" class="composer">
+              <label for="generic-agent">Declared agent</label><select id="generic-agent" required></select>
+              <label for="generic-request">Request</label><textarea id="generic-request" rows="3" maxlength="2000" required></textarea>
+              <p class="muted">Uses accepted documents. All proposed replacements require review.</p>
+              <button id="generic-run-submit" type="submit" class="primary" data-mutation disabled>Request run</button>
+            </form>
+          </div>
+          <div id="generic-input-panel" class="assessment-panel" hidden>
+            <header class="panel-heading"><h3>Add source file</h3><button id="generic-input-close" type="button" class="tertiary">Close source file</button></header>
+            <form id="generic-input-form" class="composer">
+              <label for="generic-input-path">Declared input path</label><input id="generic-input-path" maxlength="1024" required>
+              <label for="generic-input-content">File content</label><textarea id="generic-input-content" rows="5" maxlength="65536" required aria-describedby="generic-input-cap"></textarea>
+              <p id="generic-input-cap" class="muted">At most 64 KiB of UTF-8 text. Saving a changed input may start a recorded agent run.</p>
+              <button id="generic-input-submit" type="submit" data-mutation disabled>Save source file</button>
+            </form>
+          </div>
+        </div>
+      </section>
+    </div>
+    <aside id="navigation" class="sidebar" aria-label="Canvas navigation" tabindex="-1" hidden>
+      <header class="panel-heading"><h2>Navigation</h2><button id="navigation-close" type="button" class="tertiary">Close navigation</button></header>
+      <div class="sidebar-content">
+        <section><h2>Documents</h2><div id="document-tabs" class="document-tabs" role="tablist" aria-label="Accepted documents"></div><div id="proposal-picker"></div></section>
+        <section><h2>Sessions</h2><div id="sessions" class="nav-list"><p class="muted">Loading sessions…</p></div></section>
+        <section><h2>Agents and their triggers</h2><div id="agents" class="nav-list"></div></section>
+        <section><h2>Flows</h2><div id="flows" class="nav-list"></div></section>
+        <section><h2>People <span>(fictional personas)</span></h2><div id="people" class="nav-list"></div></section>
+        <p id="fictional-note" class="local-note">Fictional project data. Personas record attribution, not authorization.</p>
+      </div>
+    </aside>
+    <aside id="evidence-panel" class="audit-panel" aria-label="Recorded evidence" tabindex="-1" hidden>
+      <header class="panel-heading"><h2>Recorded evidence</h2><button id="evidence-close" type="button" class="tertiary">Close evidence</button></header>
+      <div class="audit-content">
+        <section aria-label="Document evidence"><div id="document-evidence"></div></section>
+        <section aria-label="Conversation evidence"><div id="conversation-evidence"></div></section>
+        <footer class="review-footer"><div id="review-counts" class="review-counts"></div><details class="history"><summary>Checkpoint history</summary><ol id="history-list"></ol></details><div id="history-evidence"></div></footer>
+      </div>
+    </aside>
+  </main>
+</body>
+</html>

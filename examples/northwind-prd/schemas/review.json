@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "risks": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unsupportedClaims": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "fictional": {
+      "const": true
+    }
+  },
+  "required": [
+    "summary",
+    "risks",
+    "unsupportedClaims",
+    "fictional"
+  ]
+}
