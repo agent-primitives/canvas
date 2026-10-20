@@ -1,4 +1,4 @@
-# Initialize and validate a Canvas package
+# Initialize, bind and validate a Canvas package
 
 `canvas init` writes a new, portable definition package. `canvas validate` checks
 its definition and local dependencies without starting an engine. These commands
@@ -90,6 +90,27 @@ model quality, authorization, runtime compatibility, authenticated reviewer
 identity or deployment qualification. Do not use ordinary startup as a validation
 substitute. Existing `canvas --validate --definition FILE` remains available with
 its original flag-only behavior.
+
+## Bind a supplied suite without activation
+
+`canvas bind` binds an **existing declared agent slot** to supplied local released
+suite assets. It creates a new unused output directory; the source is unchanged.
+It does not create an agent, run kmx/Lift/evals, activate, or start runtime state.
+First place the complete reviewed OCI layout inside the draft package, then use
+its actual exact reference, member and platform:
+
+```sh
+canvas bind /tmp/my-review/canvas.yaml --out /tmp/bound-review \
+  --agent writer --ref "$REVIEWED_SUITE_REF" --layout layouts/custom-writer \
+  --member "$REVIEWED_MEMBER" --platform "$REVIEWED_PLATFORM" --json
+canvas validate /tmp/bound-review/canvas.yaml --json
+```
+
+The binding retains the slot's ID and read/propose scopes and leaves other agents
+unchanged. A changed binding drops that slot's old evaluation association; it does
+not fabricate replacement evidence. Missing assets, a wrong pin/member/platform,
+unknown slot, unsupported profile or existing output refuse. Execution still needs
+an explicitly supported provider; offline validity is not model qualification.
 
 ## Compile declared flows (v1alpha3)
 
@@ -185,11 +206,11 @@ OS isolation. See the tutorial for the complete review/stop/reopen sequence.
 
 ## Scriptable results and refusals
 
-Add `--json` to either command for exactly one JSON object on stdout. Version
+Add `--json` to any authoring command for exactly one JSON object on stdout. Version
 `canvas.authoring/v1` has these fields:
 
-- `schemaVersion`, `operation` (`init` or `validate`), `ok`, `status`;
-- `files`: sorted package-relative file inventory for successful init, otherwise
+- `schemaVersion`, `operation` (`init`, `bind` or `validate`), `ok`, `status`;
+- `files`: sorted package-relative file inventory for successful init/bind, otherwise
   an empty array;
 - `diagnostics`: zero or more `{code, path, pointer, message}` records. Paths and
   pointers may be empty when the strict loader cannot safely identify a field.
