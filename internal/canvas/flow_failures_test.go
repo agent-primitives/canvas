@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/kaimahi-agents/canvas/internal/sessionauth"
-	"github.com/kaimahi-agents/canvas/internal/sharedspace"
+	"github.com/agent-primitives/canvas/internal/sessionauth"
+	"github.com/agent-primitives/canvas/internal/sharedspace"
 )
 
 func TestWorkflowKnownUndispatchedRefusalCanBeCanceled(t *testing.T) {

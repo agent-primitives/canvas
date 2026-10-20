@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-primitives/canvas/internal/contract"
+	"github.com/agent-primitives/canvas/internal/sessionauth"
 	"github.com/agent-primitives/sessions/api"
-	"github.com/kaimahi-agents/canvas/internal/contract"
-	"github.com/kaimahi-agents/canvas/internal/sessionauth"
 )
 
 func workflowFixture(t *testing.T, action bool, output func(map[string]any) string) (*Canvas, *atomic.Int32) {

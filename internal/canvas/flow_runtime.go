@@ -11,11 +11,11 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/agent-primitives/canvas/internal/contract"
+	"github.com/agent-primitives/canvas/internal/sessionauth"
+	"github.com/agent-primitives/canvas/internal/sharedspace"
 	"github.com/agent-primitives/sessions/api"
 	"github.com/agent-primitives/sessions/client"
-	"github.com/kaimahi-agents/canvas/internal/contract"
-	"github.com/kaimahi-agents/canvas/internal/sessionauth"
-	"github.com/kaimahi-agents/canvas/internal/sharedspace"
 )
 
 var ErrFlowConflict = errors.New("workflow state, binding or request conflicts; inspect before acting")

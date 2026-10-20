@@ -7,8 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/agent-primitives/canvas/internal/sharedspace"
 	"github.com/agent-primitives/sessions/client"
-	"github.com/kaimahi-agents/canvas/internal/sharedspace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
