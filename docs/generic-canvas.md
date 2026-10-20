@@ -7,7 +7,7 @@ Sessions. The default definition is `examples/northwind-prd/canvas.yaml` and the
 default state is `.state/northwind`; use `--definition` for another generic
 definition and separate state for its history. Empty definitions are refused.
 `make dev` prepares the model and selects Northwind explicitly.
-First-time readers should start with the [local setup](../README.md#quick-start)
+First-time readers should start with the [local model setup](local-models.md#quick-start)
 and the [Northwind walkthrough](../examples/northwind-prd/README.md).
 For new definitions, use the [manual-only authoring starter and offline validation](canvas-authoring.md)
 before deciding whether to start a runtime.
@@ -22,7 +22,7 @@ go run ./cmd/canvas --definition examples/northwind-prd/canvas.yaml \
 
 This starts the embedded local host, not a separate `sessions-host` process.
 The command does not start Ollama. For an already configured hosted endpoint,
-use `MODEL_PROFILE=hosted`; see [model configuration](../README.md#using-a-hosted-model-instead).
+use `MODEL_PROFILE=hosted`; see [model configuration](local-models.md#using-a-hosted-model-instead).
 
 For a provider-free run, use [the generated-canvas fixture walkthrough](your-first-review-canvas.md).
 `--fixture` still requires an explicit `--definition` and `--state`; the default

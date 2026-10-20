@@ -1,114 +1,61 @@
 # Canvas
 
-**Review what durable agents propose, inside the GitHub Copilot app.**
+When an agent changes a document, people need to see what changed and decide which version to keep.
 
-Canvas puts an agent's proposed document changes in front of a reviewer.
-People decide what becomes accepted, Git keeps the document history, and
-Sessions records how the agent did the work. Document acceptance, action approval
-and continuation are separate steps, each tied to the work being reviewed.
+> An agent drafts a fictional product plan and an announcement.
+>
+> You compare both proposed documents with the current versions.
+>
+> You accept or reject the whole proposal.
+>
+> Publishing needs a separate approval. The demo simulates it without sending anything.
 
-For developers building human-review workflows, Canvas starts with a Copilot
-review UI and grows toward shared documents, several agents and multiple
-reviewers. The goal is a real approver and a replayable decision record.
+Canvas is a document-review workspace for developers building human review into
+agent workflows. Git keeps the accepted document history, and
+[Sessions](https://github.com/agent-primitives/sessions) records agent runs and
+decisions. It is not a shared service or a live publishing tool.
+It also runs as a panel in the GitHub Copilot app through an optional
+[local extension](docs/copilot-review.md).
 
-**Pre-1.0:** today's local demo uses fictional drafts, real Git/Sessions records and simulated actions.
-**Access:** one trusted operator on loopback; signed-in approval and shared access are still being built.
+**Status: pre-1.0. The local demo supports one trusted operator, uses fixed responses and simulates actions.**
 
-Canvas owns document review. [Sessions](https://github.com/agent-primitives/sessions)
-records durable execution; [AgentSuite](https://github.com/agent-primitives/suite)
-identifies portable agents; [kmx](https://github.com/kaimahi-agents/kaimahi)
-authors, evaluates, packages and deploys them.
+## Try it locally
 
-See the [architecture diagrams](docs/architecture.md) for today's local boundaries
-and the planned hosted assembly.
-
-## Try the smallest working path
-
-From a normal checkout with Git and Go 1.27+ (toolchain 1.27.2 downloads enabled):
+You need Git, Go and a browser. See the [Go requirements](docs/local-models.md#what-you-need)
+if you do not have Go installed.
 
 ```sh
+git clone https://github.com/agent-primitives/canvas.git
+cd canvas
 go run ./cmd/copilot-review
 ```
 
-Open the printed loopback URL for the browser fallback, or follow
-[the Copilot extension guide](docs/copilot-review.md) to open **Northwind Engine
-Review** in a repository session (Node 26 required for its backend).
-The demo supplies fixed responses using the Northwind definition, so you can
-try it without a model download, provider key, container or cloud.
-Use normal checkout modes; the fixture checks its suite inventory.
+Open the printed URL in your browser. Use **New… → New agent run** to request a
+draft from **PRD writer**. Inspect both documents, then accept or reject the
+proposal. No model download, provider key, container or cloud account is needed.
 
-Create a writer draft, inspect both documents and accept or reject the complete
-proposal. Then separately request action approval, record a decision and
-explicitly continue the simulation. Check replay in the evidence controls.
-The selected demo role is an attribution label; approval authority requires
-verified identity, separately from Copilot sign-in.
+Accepting documents does not approve publication. To try the rest of the demo,
+request action approval, record a decision, then explicitly continue the
+simulation. The [browser workflow guide](docs/local-models.md#try-the-northwind-workflow)
+explains the review steps and replay limits; this demo uses fixed responses instead
+of a model.
 
-Ctrl-C stops the engine. Private state remains in `.state/copilot-northwind`;
-keep it on your own machine.
+Press Ctrl+C to stop. Local state remains in `.state/copilot-northwind`.
+Use fictional data and keep that state private. Demo roles and Copilot sign-in do
+not verify who approved a change.
 
-## What you need
+## Go deeper
 
-See [model-backed prerequisites](docs/local-models.md#what-you-need), or use the
-smaller prerequisite list for the deterministic review demo above.
+- [Review inside the GitHub Copilot app](docs/copilot-review.md): optional extension setup and the demo's limits.
+- [Run with a real model](docs/local-models.md): local or hosted setup, costs and state precautions.
+- [Review release notes with two agents](docs/review-release-notes-with-two-agents.md): writer/reviewer walkthrough using a real hosted model.
+- [Make your own review workspace](docs/your-first-review-canvas.md): a model-free walkthrough using your own starting document.
+- [Architecture](docs/architecture.md) and [current limits](docs/README.md#current-limits): document history, approvals, execution and planned shared access.
+- [Development and verification](docs/development.md): build, test and browser checks.
+- [All documentation](docs/README.md) and [roadmap](ROADMAP.md).
 
-## Quick start
-
-For model-backed startup with `make dev`, see [local model setup](docs/local-models.md#quick-start)
-and the [Northwind walkthrough](examples/northwind-prd/README.md). It selects
-Northwind with embedded Sessions and separate `.state/northwind` state. The
-review demo above supplies fixed responses instead. `make run` and the flagless
-Canvas command use the same Northwind default with an already configured model.
-
-## Try the Northwind workflow
-
-Follow the [Northwind review steps](docs/local-models.md#try-the-northwind-workflow)
-and [worked example](examples/northwind-prd/README.md).
-
-## Trying the legacy Draft Room
-
-The football backend and example have been removed. Existing legacy workspaces
-are not migrated, reset or reactivated; selecting them explicitly is refused.
-Historical session formats and archived contracts remain readable as described in
-[runtime compatibility](docs/runtime-upgrade.md). Keep old state private and backed
-up; see [state and backup guidance](docs/local-models.md#resetting).
-
-## Using a hosted model instead
-
-Use the [hosted-model configuration guide](docs/local-models.md#using-a-hosted-model-instead)
-for endpoint selection, private key files, metadata checks and charge warnings.
-
-### Diagnosing an endpoint without generating
-
-Use the [metadata-only endpoint checks](docs/local-models.md#diagnosing-an-endpoint-without-generating)
-before starting a model-backed run.
-
-## Resetting
-
-See [separate state paths and backups](docs/local-models.md#resetting).
-
-## Upgrading existing state
-
-Read [backup and upgrade precautions](docs/local-models.md#upgrading-existing-state)
-before opening existing state with a newer runtime.
-
-## Development
-
-See [development and verification](docs/development.md) for test/build requirements,
-deterministic browser checks and model-qualification limits.
-
-## More
-
-- [Docs index](docs/README.md): choose the deterministic, model-backed, authoring or recovery path.
-- [Roadmap](ROADMAP.md): authenticated AKS review, shared work, and later frontend choices.
-- [Copilot review guide](docs/copilot-review.md): setup, workflow and trust limits.
-- [Definition authoring](docs/canvas-authoring.md): draft files and validate before activation.
-- [Generic Canvas](docs/generic-canvas.md): documents, scopes, recovery and exact-snapshot approval.
-- [Model-backed walkthrough](examples/northwind-prd/README.md): run the Northwind definition with a model instead of fixed responses.
-- [Released-suite fixture](examples/northwind-released/README.md): agent identity and unsigned evaluation consistency.
-- [Runtime compatibility](docs/runtime-upgrade.md): backups and migration limits.
-
-A Copilot authoring plugin and Claude Artifacts front end are **planned, not
-started**, after the first public release. Both will use the same engine.
+See [SUPPORT.md](SUPPORT.md) for help and [SECURITY.md](SECURITY.md) for private
+vulnerability reporting. This project uses the [MIT License](LICENSE).
 
 ## Contributing
 
