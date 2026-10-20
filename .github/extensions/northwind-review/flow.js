@@ -18,6 +18,22 @@ export function createFlowPanel({ api, action, selectionChanged, requesterRole }
   const withRun = () => ({ run: current().id, role: current().role });
   const fields = () => [...$('flow-fields').querySelectorAll('[data-property]')];
 
+  function renderSteps(target, flow, run) {
+    $(target).replaceChildren();
+    for (const [i, step] of (flow?.definition.steps || []).entries()) {
+      const li = document.createElement('li'); li.dataset.step = step.id;
+      const done = run && (i < run.position || run.state === 'complete');
+      if (run && i === run.position && !terminal(run.state)) li.setAttribute('aria-current', 'step');
+      li.append(node('strong', `${step.id}: ${step.agent ? state.agents.find(agent => agent.id === step.agent)?.name || step.agent : 'Simulated action'}`));
+      if (step.gate) {
+        const documents = step.gate.accept.map(id => snapshot.documents[id]?.title || id).join(', ');
+        li.append(node('p', `Required proposal: ${documents}. Human gate: ${step.gate.role} (unverified local role). All additional replacements are reviewed too.`));
+      } else li.append(node('p', 'Review the exact accepted snapshot → record approval or denial → fresh confirmation → Continue simulation → local receipt.'));
+      if (done) li.append(node('span', 'Completed'));
+      $(target).append(li);
+    }
+  }
+
   function renderForm() {
     const flow = formDefinition();
     const next = JSON.stringify([flow, snapshot.operatorAgentRuns]);
@@ -55,6 +71,8 @@ export function createFlowPanel({ api, action, selectionChanged, requesterRole }
     $('flow-form-help').textContent = formSupported ? 'Every agent step waits for human review. Optional empty controls are not provided. Runs retain this workspace; use a new instance for an independent topic.' : 'This schema needs controls the panel does not support. Nothing can run from this form; no fields or constraints were silently dropped.';
     const max = Math.min(flow?.definition.limits.agentRuns || 0, snapshot.operatorAgentRuns);
     $('flow-budget').max = String(max); $('flow-budget').value = String(max);
+    $('flow-preview-title').textContent = `New run preview: ${flow?.id || ''}`;
+    renderSteps('flow-preview', flow);
   }
 
   function renderStatus(view) {
@@ -71,20 +89,7 @@ export function createFlowPanel({ api, action, selectionChanged, requesterRole }
     $('flow-record').textContent = run ? `Run ${run.id}; requester role ${run.role} (unverified local attribution); starting revision ${run.startBase}.` : 'Operator-loaded definition. Draft activation and editing are not available in this panel.';
     const listKey = JSON.stringify([definition() || formDefinition(), run?.position, run?.state, state.agents]);
     if ($('flow-steps').dataset.key !== listKey) {
-      $('flow-steps').replaceChildren();
-      const flow = definition() || formDefinition();
-      for (const [i, step] of (flow?.definition.steps || []).entries()) {
-        const li = document.createElement('li'); li.dataset.step = step.id;
-        const done = run && (i < run.position || run.state === 'complete');
-        if (run && i === run.position && !terminal(run.state)) li.setAttribute('aria-current', 'step');
-        li.append(node('strong', `${step.id}: ${step.agent ? state.agents.find(agent => agent.id === step.agent)?.name || step.agent : 'Simulated action'}`));
-        if (step.gate) {
-          const documents = step.gate.accept.map(id => snapshot.documents[id]?.title || id).join(', ');
-          li.append(node('p', `Required proposal: ${documents}. Human gate: ${step.gate.role} (unverified local role). All additional replacements are reviewed too.`));
-        } else li.append(node('p', 'Review the exact accepted snapshot → record approval or denial → fresh confirmation → Continue simulation → local receipt.'));
-        if (done) li.append(node('span', 'Completed'));
-        $('flow-steps').append(li);
-      }
+      renderSteps('flow-steps', definition() || formDefinition(), run);
       $('flow-steps').dataset.key = listKey;
     }
   }

@@ -12,7 +12,8 @@
 <section id="flow-panel" aria-labelledby="flow-title" hidden>
 <h2 id="flow-title">Declared workflow</h2><p id="flow-definition" class="hint"></p>
 <details id="flow-form"><summary>Run inputs and budget</summary><form id="flow-run-form">
-<label for="flow-definition-select">Flow</label><select id="flow-definition-select"></select><div id="flow-fields"></div>
+<label for="flow-definition-select">Flow</label><select id="flow-definition-select"></select>
+<h3 id="flow-preview-title">New run preview</h3><ol id="flow-preview" aria-labelledby="flow-preview-title"></ol><div id="flow-fields"></div>
 <label for="flow-budget">Attempt budget</label><input id="flow-budget" type="number" min="1" step="1" required>
 <p id="flow-form-help" class="hint"></p><button id="flow-start" type="submit" disabled>Run flow</button></form></details>
 <p id="flow-pending" class="notice" hidden>Run outcome is being inspected. No replacement key or automatic retry will be used.</p><button id="flow-resubmit" class="secondary" hidden>Retry the exact same Run request</button>

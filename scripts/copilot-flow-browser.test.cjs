@@ -263,7 +263,7 @@ test('an unreceived Run retains its exact key until an explicit same-request ret
   assert.deepEqual(p.errors, []);
 });
 
-test('selecting a different declared flow updates its preview before anything runs', async t => {
+test('new-run flow selection previews independently of completed run progress', async t => {
   const p = await flowPanel(t, text => text.replace('  flows:\n', '  flows:\n    short:\n      inputs: {schema: schemas/run.json}\n      limits: {agentRuns: 2}\n      steps:\n        - {id: short-draft, agent: writer, gate: {accept: [prd, announcement], role: reviewer}}\n'));
   await p.ready(); await p.frame.locator('#flow-open').click();
   assert.equal(await p.frame.locator('#flow-steps > li').count(), 4);
@@ -271,5 +271,29 @@ test('selecting a different declared flow updates its preview before anything ru
   assert.equal(await p.frame.locator('#flow-steps > li').count(), 1);
   assert.equal(await p.frame.locator('#flow-budget').inputValue(), '2');
   assert.equal((await p.api('/api/demo')).providerCalls, 0);
+  await p.frame.locator('#flow-definition-select').selectOption('release'); await p.ready();
+  await startTopic(p, 'Completed flow before another selection');
+  await acceptGate(p, 'draft'); await acceptGate(p, 'critique'); await acceptGate(p, 'revise');
+  await p.frame.locator('#action-status').filter({ hasText: 'pending-approval' }).waitFor(); await p.ready();
+  await p.frame.locator('#action-confirm').check(); await p.frame.locator('#approve').click();
+  await p.frame.locator('#flow-status').filter({ hasText: 'Approved; not executed' }).waitFor(); await p.ready();
+  await p.frame.locator('#action-confirm').check(); await p.frame.locator('#continue').click();
+  await p.frame.locator('#flow-status').filter({ hasText: 'Complete' }).waitFor(); await p.ready();
+  const history = await p.frame.locator('#flow-history').inputValue();
+  await p.frame.locator('#flow-open').click();
+  await p.frame.locator('#flow-definition-select').selectOption('short'); await p.ready();
+  const preview = p.frame.getByRole('list', { name: 'New run preview: short' });
+  assert.equal(await preview.locator('li').count(), 1, 'new-run preview must follow the form, not the completed historical flow');
+  assert.match(await preview.textContent(), /short-draft/);
+  assert.doesNotMatch(await preview.textContent(), /Completed/);
+  assert.equal(await p.frame.locator('#flow-steps > li').count(), 4, 'selected run retains its own steps and progress');
+  assert.equal(await p.frame.locator('#flow-steps > li span').count(), 4);
+  assert.equal(await p.frame.locator('#flow-history').inputValue(), history);
+  assert.equal(await p.frame.locator('#flow-budget').inputValue(), '2');
+  assert.equal((await p.api('/api/demo')).providerCalls, 3);
+  await startTopic(p, 'New short flow', '2');
+  assert.equal(p.posts.filter(post => post.path === '/api/flow/start').at(-1).body.flow, 'short');
+  assert.equal((await p.api('/api/flows')).runs.at(-1).flow, 'short');
+  assert.equal((await p.api('/api/demo')).providerCalls, 4);
   assert.deepEqual(p.errors, []);
 });
