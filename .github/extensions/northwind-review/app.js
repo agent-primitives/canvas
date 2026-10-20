@@ -8,7 +8,8 @@ const inspectionKey = () => `${selectionGeneration}:${selected}:${flowUI?.key() 
 function setText(id, text) { if ($(id).textContent !== text) $(id).textContent = text; }
 function announce(message) { setText('status', message); }
 const reviewRole = () => flowUI?.gateRole() || demo?.reviewerRole || 'GM';
-const remoteSessions = () => ['authenticated-sessions', 'trusted-loopback-sessions'].includes(demo?.mode);
+const hostedSessions = () => demo?.mode === 'hosted-sessions';
+const remoteSessions = () => ['authenticated-sessions', 'trusted-loopback-sessions', 'hosted-sessions'].includes(demo?.mode);
 
 async function api(path, body) {
   try {
@@ -36,9 +37,9 @@ function controls() {
   $('accept').disabled = !ready || !gate || p?.status !== 'pending' || !$('document-confirm').checked;
   $('reject').disabled = !ready || !gate || !['pending', 'stale'].includes(p?.status) || !$('document-confirm').checked;
   $('verify').disabled = !ready || !run() || remoteSessions();
-  $('request').disabled = !ready || p?.status !== 'accepted' || !Object.hasOwn(p?.changes || {}, 'announcement.md') || !!view;
-  $('action-confirm').disabled = !enabled || !view || view.concluded;
-  const actionReady = ready && (!flowUI || flowUI.actionAllowed());
+  $('request').disabled = hostedSessions() || !ready || p?.status !== 'accepted' || !Object.hasOwn(p?.changes || {}, 'announcement.md') || !!view;
+  $('action-confirm').disabled = hostedSessions() || !enabled || !view || view.concluded;
+  const actionReady = !hostedSessions() && ready && (!flowUI || flowUI.actionAllowed());
   const decision = actionReady && view?.status === 'pending-approval' && $('action-confirm').checked;
   $('approve').disabled = !decision; $('deny').disabled = !decision;
   $('continue').disabled = !actionReady || !view || view.concluded || !['approved', 'denied'].includes(view.status) || !$('action-confirm').checked;
@@ -93,7 +94,7 @@ function stage() {
   $('approve').hidden = !deciding; $('deny').hidden = !deciding; $('continue').hidden = !continuing;
   $('continue').textContent = view?.status === 'denied' ? 'Conclude without simulation' : 'Continue simulation';
   $('action-confirm-label').textContent = continuing ? 'I rechecked this exact accepted snapshot and recorded decision.' : 'I reviewed this exact accepted snapshot and request.';
-  $('action-help').textContent = deciding ? 'Confirm the snapshot before recording a decision. Recording approval does not run the simulation.' : continuing ? 'Fresh confirmation is required because recording a decision is separate from continuing. Recheck the snapshot, then confirm again.' : view?.concluded ? 'This action has concluded. Nothing was sent or published.' : 'Request action approval to inspect the accepted announcement snapshot. No decision or simulation happens automatically.';
+  $('action-help').textContent = hostedSessions() ? 'Hosted announcements and execution are unavailable. Identity not exercised; no action can be requested, approved or continued here.' : deciding ? 'Confirm the snapshot before recording a decision. Recording approval does not run the simulation.' : continuing ? 'Fresh confirmation is required because recording a decision is separate from continuing. Recheck the snapshot, then confirm again.' : view?.concluded ? 'This action has concluded. Nothing was sent or published.' : 'Request action approval to inspect the accepted announcement snapshot. No decision or simulation happens automatically.';
 }
 function showReviewer(id, reviewer, selectedRole = false) {
   const present = reviewer?.issuer && reviewer?.subject && reviewer?.role;
@@ -101,6 +102,7 @@ function showReviewer(id, reviewer, selectedRole = false) {
   $(id).textContent = present ? `Reviewed by ${reviewer.subject} (${reviewer.issuer}); role: ${reviewer.role}${selectedRole ? ' (selected attribution, not a sessions role grant)' : ''}. Identity: engine-verified, not sessions-attested.` : '';
 }
 function actionSummary() {
+  if (hostedSessions()) return 'Hosted announcements and replay are unavailable. Identity not exercised. Document review does not execute an action.';
   if (!view) return proposal()?.status === 'accepted' ? 'Documents accepted. Request action approval to review the separate simulated action.' : 'Accept documents before requesting action approval.';
   if (view.status === 'approved') return 'Recorded; not executed. Confirm again, then Continue simulation.';
   if (view.status === 'denied') return view.concluded ? 'Denial concluded. No simulation ran. Nothing sent or published.' : 'Denial recorded; no simulation will run. Confirm again, then conclude without simulation.';
@@ -151,7 +153,7 @@ async function render(generation) {
     setText('identity', 'Identity is verified per action. The engine authorizes document-review roles; sessions authorizes tool approval.');
     setText('engine-description', 'Authenticated sessions connection. Document review and action approval remain separate.');
   } else if (remoteSessions()) {
-    setText('identity', 'Identity not exercised. Unauthenticated trusted-loopback sessions.');
+    setText('identity', hostedSessions() ? 'Identity not exercised. Unauthenticated hosted sessions on a trusted network.' : 'Identity not exercised. Unauthenticated trusted-loopback sessions.');
     setText('engine-description', 'Remote document producer. Document review does not grant action approval.');
   } else if (['hosted-model', 'offline-model'].includes(demo.mode)) {
     setText('identity', 'Identity not exercised. Roles are local attribution, not verified identity.');
@@ -188,7 +190,7 @@ async function render(generation) {
     $('document-confirm').checked = false;
     documentKey = key;
   }
-  showReviewer('document-reviewer', p?.reviewer);
+  showReviewer('document-reviewer', hostedSessions() ? null : p?.reviewer);
   const operation = state.announcements?.find(item => item.stage !== 'abandoned' && item.proposal === selected && item.action === 'announce');
   const actionID = flowUI ? flowUI.current()?.action : operation?.id;
   let inspectedView = null;
@@ -199,7 +201,7 @@ async function render(generation) {
   const nextActionKey = JSON.stringify([demo.boot, view]);
   if (nextActionKey !== actionKey) { actionKey = nextActionKey; $('action-confirm').checked = false; controls(); $('action-proof').textContent = ''; }
   $('action-status').textContent = actionSummary();
-  showReviewer('action-reviewer', view?.identitySource === 'engine-verified' ? view.reviewer : null, true);
+  showReviewer('action-reviewer', !hostedSessions() && view?.identitySource === 'engine-verified' ? view.reviewer : null, true);
   $('warning').hidden = !view?.warning; $('warning').textContent = view?.warning || '';
   $('snapshot').hidden = !view; $('snapshot').textContent = view?.snapshot?.content || '';
   $('evidence').textContent = view ? JSON.stringify(view, null, 2) : 'No action requested.';
@@ -209,7 +211,7 @@ async function render(generation) {
   const nextOutcome = JSON.stringify([selected, p?.status, view?.status, view?.concluded, pendingRun, flowUI?.key()]);
   if (nextOutcome !== outcomeKey) {
     outcomeKey = nextOutcome;
-    const actionOutcome = view?.status === 'approved' ? 'Approval recorded; not executed.' : view?.status === 'denied' ? (view.concluded ? 'Denial concluded without simulation.' : 'Denial recorded. Confirmation needed to conclude.') : view?.status === 'pending-approval' ? 'Action decision awaiting review.' : view?.status === 'simulated' && view.concluded ? 'Simulation concluded. Nothing sent or published.' : view ? 'Inspect the recorded action state.' : 'Documents accepted. Review the separate action.';
+    const actionOutcome = hostedSessions() ? 'Documents reviewed. Hosted announcements and replay are unavailable; identity not exercised.' : view?.status === 'approved' ? 'Approval recorded; not executed.' : view?.status === 'denied' ? (view.concluded ? 'Denial concluded without simulation.' : 'Denial recorded. Confirmation needed to conclude.') : view?.status === 'pending-approval' ? 'Action decision awaiting review.' : view?.status === 'simulated' && view.concluded ? 'Simulation concluded. Nothing sent or published.' : view ? 'Inspect the recorded action state.' : 'Documents accepted. Review the separate action.';
     if (flowUI && !actionError) announce($('flow-status').textContent);
     if (!flowUI && !actionError) announce(pendingRun ? 'Writer is preparing a draft…' : !p ? 'Start a writer draft. Review its documents before any action decision.' : p.status === 'pending' ? `Review ${Object.keys(p.changes).length} proposal documents, then accept or reject the complete proposal.` : p.status === 'stale' ? 'Proposal stale. Acceptance is unavailable. Reject it or create a new draft against the current documents.' : p.status === 'rejected' ? 'Documents rejected. No action approved. Start a new draft when ready.' : actionOutcome);
   }

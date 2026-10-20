@@ -53,6 +53,8 @@ type AgentDefinition struct {
 // CompiledDefinition exposes presentation/configuration data. Changes uses a
 // private compiled scope/schema snapshot, never the caller-mutable maps.
 type CompiledDefinition struct {
+	// runtimeProject is an instance-only binding, never source definition data.
+	runtimeProject string
 	archives       *contract.ArchiveResolver
 	verifiedSuites map[string]*contract.SuiteIdentity
 	APIVersion     string
