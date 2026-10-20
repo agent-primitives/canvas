@@ -6,7 +6,7 @@ Personas label who acted; they are not accounts or authentication.
 
 ## Start locally
 
-Follow the [model-backed local setup](../../README.md#quick-start) to prepare
+Follow the [model-backed local setup](../../docs/local-models.md#quick-start) to prepare
 the pinned Ollama model, check metadata and start Northwind with `make dev`.
 For a direct start once the model is ready, use:
 
@@ -18,7 +18,7 @@ This command uses this directory's `canvas.yaml`, an embedded local Sessions
 host, and separate `.state/northwind` state. It does not start Ollama itself.
 Open the printed URL (default http://127.0.0.1:8765) and look for
 **Northwind fictional PRD**. No cloud account is needed. Alternatively, configure
-an existing [HTTPS model endpoint](../../README.md#using-a-hosted-model-instead)
+an existing [HTTPS model endpoint](../../docs/local-models.md#using-a-hosted-model-instead)
 first, then use `MODEL_PROFILE=hosted`; its generation may incur charges.
 
 `make dev`, `make run` and the flagless Canvas command select this example and

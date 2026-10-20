@@ -102,7 +102,7 @@ responsibilities, not guarantees conferred by the runtime API itself.
 ## Qualification boundary
 
 Cluster deployment is not a supported setup path. Use the local workflow in
-the [README](../README.md#quick-start).
+the [local model setup](local-models.md#quick-start).
 
 Local fake-Control, scripted-provider and SQLite tests do not qualify cloud
 images, a live actor router, snapshot selection, or live cluster deployment.

@@ -28,6 +28,18 @@ unauthenticated. Copilot sign-in and demo roles are not Canvas review authority.
 - **Develop or test:** [development guide](development.md), including browser
   tools, offline tests and model-qualification limits.
 
+## Related projects
+
+Canvas owns document review. [Sessions](https://github.com/agent-primitives/sessions)
+records durable execution; [AgentSuite](https://github.com/agent-primitives/suite)
+identifies portable agents; [kmx](https://github.com/kaimahi-agents/kaimahi)
+authors, evaluates, packages and deploys them.
+
+The current review UI works in a browser or the GitHub Copilot app. Shared
+workspaces, several reviewers and signed-in approval are still being built.
+A Copilot authoring plugin and Claude Artifacts front end are planned, not
+started; see the [roadmap](../ROADMAP.md).
+
 ## Current limits
 
 Only a single trusted local operator is supported. The signed-in AKS review
