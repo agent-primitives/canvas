@@ -316,7 +316,7 @@ func TestHostedTLSRunReviewReopen(t *testing.T) {
 		t.Fatal("replacement retained old UID")
 	}
 	e3.Close()
-	binding := hostingRecord{Version: 1, InstanceID: f.config.InstanceID, DefinitionDigest: d.Digest, SessionsEndpoint: f.config.SessionsEndpoint}
+	binding := hostingRecord{Version: 1, InstanceID: f.config.InstanceID, DefinitionDigest: d.Digest, SessionsEndpoint: f.config.SessionsEndpoint, AuthMode: f.config.AuthMode, TrustedNetwork: f.config.TrustedNetwork}
 	release, err := acquireState(f.config.StateDirectory, binding)
 	if err != nil {
 		t.Fatal(err)

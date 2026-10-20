@@ -18,6 +18,8 @@ type hostingRecord struct {
 	InstanceID       string `json:"instanceID"`
 	DefinitionDigest string `json:"definitionDigest"`
 	SessionsEndpoint string `json:"sessionsEndpoint"`
+	AuthMode         string `json:"authMode"`
+	TrustedNetwork   bool   `json:"trustedNetwork"`
 }
 
 var errHosting = errors.New("private hosted state is invalid or incompatible; use separate prepared state, never reset/adopt existing history")

@@ -15,7 +15,7 @@ func TestStatePreflightNoAdoptionOrPermissionRepair(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			cfg := validConfig(t)
 			root := cfg.StateDirectory
-			want := hostingRecord{Version: 1, InstanceID: cfg.InstanceID, DefinitionDigest: "digest", SessionsEndpoint: cfg.SessionsEndpoint}
+			want := hostingRecord{Version: 1, InstanceID: cfg.InstanceID, DefinitionDigest: "digest", SessionsEndpoint: cfg.SessionsEndpoint, AuthMode: cfg.AuthMode, TrustedNetwork: cfg.TrustedNetwork}
 			if err := os.Mkdir(root, 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -63,7 +63,7 @@ func TestHostingBootstrapScratchRecovery(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			cfg := validConfig(t)
 			root := cfg.StateDirectory
-			want := hostingRecord{Version: 1, InstanceID: cfg.InstanceID, DefinitionDigest: "digest", SessionsEndpoint: cfg.SessionsEndpoint}
+			want := hostingRecord{Version: 1, InstanceID: cfg.InstanceID, DefinitionDigest: "digest", SessionsEndpoint: cfg.SessionsEndpoint, AuthMode: cfg.AuthMode, TrustedNetwork: cfg.TrustedNetwork}
 			if err := os.Mkdir(root, 0700); err != nil {
 				t.Fatal(err)
 			}
@@ -117,7 +117,7 @@ func TestHostingBootstrapRejectsUnknownScratch(t *testing.T) {
 			t.Run(kind+map[bool]string{false: "-unmarked", true: "-marked"}[marked], func(t *testing.T) {
 				cfg := validConfig(t)
 				root := cfg.StateDirectory
-				want := hostingRecord{Version: 1, InstanceID: cfg.InstanceID, DefinitionDigest: "digest", SessionsEndpoint: cfg.SessionsEndpoint}
+				want := hostingRecord{Version: 1, InstanceID: cfg.InstanceID, DefinitionDigest: "digest", SessionsEndpoint: cfg.SessionsEndpoint, AuthMode: cfg.AuthMode, TrustedNetwork: cfg.TrustedNetwork}
 				if err := os.Mkdir(root, 0700); err != nil {
 					t.Fatal(err)
 				}
@@ -173,7 +173,7 @@ func TestPrivateChildSetgidParentAndPartialBootstrap(t *testing.T) {
 	before, _ := os.Stat(parent)
 	cfg := validConfig(t)
 	cfg.StateDirectory = filepath.Join(parent, "state")
-	want := hostingRecord{Version: 1, InstanceID: cfg.InstanceID, DefinitionDigest: "digest", SessionsEndpoint: cfg.SessionsEndpoint}
+	want := hostingRecord{Version: 1, InstanceID: cfg.InstanceID, DefinitionDigest: "digest", SessionsEndpoint: cfg.SessionsEndpoint, AuthMode: cfg.AuthMode, TrustedNetwork: cfg.TrustedNetwork}
 	if err := preflightState(cfg.StateDirectory, want); err != nil {
 		t.Fatal(err)
 	}

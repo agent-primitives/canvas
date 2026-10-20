@@ -49,12 +49,27 @@ Before running the image with a read-only root filesystem, the operator must:
   setgid/setuid/sticky bits or symlinks/special files. Nonprivate or read-only
   existing state is refused, not chmod/chowned or migrated. A new child under a
   setgid parent has setgid cleared on **that new child only**; parents are untouched.
+  Prepare this mount **without `fsGroup`**, as the deployment chart does.
+  With `fsGroupChangePolicy: Always` (the default), kubelet's recursive permission
+  walk can rewrite `/data/state` to **2770**, so the next start correctly refuses
+  it as nonprivate. If `fsGroup` is required, use `OnRootMismatch` with a volume
+  root already prepared to match its group, permissions and setgid requirements,
+  so kubelet skips recursion and leaves the private 0700 child untouched. Do not
+  weaken preflight or recursively repair existing engine state.
 - Mount readable TLS material separately. `/sessions-ca/ca.crt` contains only
   the trusted Sessions CA(s), **not the host's private key**. The engine gets its
   own `/engine-tls/tls.crt` and `/engine-tls/tls.key`. Keep Secret access limited
   to the runtime UID without weakening private file modes. Kubelet projected
   `..data` Secret symlinks are supported: opened targets must be regular files,
   at most 1 MiB each. TLS material is loaded once: **rotation requires restart**.
+  Readiness returns **503 at the earliest `NotAfter`** of the loaded serving
+  certificate chain or any successfully parsed certificate in the Sessions CA
+  bundle. This is deliberately conservative: even an unused expired anchor
+  makes the engine unready; remove or renew it and restart. Startup can complete
+  with an unused expired anchor, but readiness will not succeed. Replacing Secret
+  files alone does not refresh loaded material. This check does not probe Sessions
+  or attest its peer certificate's lifetime; normal TLS verification still rejects
+  invalid peers on connection.
 
 ## Closed version-1 configuration
 
@@ -88,7 +103,11 @@ verified Service/namespace names):
 `instanceID` is a bounded project name (`[a-z][a-z0-9-]{0,62}`), independent of
 the definition ID. Both the Sessions client default project and Canvas's runtime
 project use it; the source definition's ID/digest are not rewritten. Use a unique
-instance and private state/PVC per release.
+instance and private state/PVC per release. The Sessions project is a **filter,
+not an access boundary**. Access to these trusted-network entry points is bounded
+by Kubernetes **`pods/portforward` and `pods/exec` RBAC**, plus the Sessions
+**NetworkPolicy**. These transport/operator controls are not signed-in approval
+or tenant isolation; identity remains not exercised.
 
 The API and readiness bind **only literal 127.0.0.1**, never `0.0.0.0`, DNS or
 IPv6. Ports must be numeric and separate. Port 0 is accepted only on these two
@@ -120,11 +139,12 @@ Before SharedSpace or Canvas is opened, it atomically publishes and fsyncs a
 private `hosting.json` binding:
 
 ```json
-{"version":1,"instanceID":"review-release-one","definitionDigest":"<compiled-digest>","sessionsEndpoint":"agents-sessions.default.svc.cluster.local:8080"}
+{"version":1,"instanceID":"review-release-one","definitionDigest":"<compiled-digest>","sessionsEndpoint":"agents-sessions.default.svc.cluster.local:8080","authMode":"off","trustedNetwork":true}
 ```
 
-All four values must match exactly on restart. An unmarked nonempty root is
-refused. A fresh root may contain only the stable regular `.producer.lock` and
+All six values must match exactly on restart, including the recorded auth mode
+and trusted-network setting. Older markers missing either mode field are refused,
+not adopted, defaulted or migrated. An unmarked nonempty root is refused. A fresh root may contain only the stable regular `.producer.lock` and
 recognized marker-publication scratch files: private regular `.hosting-<nonce>`
 files in the generated base32 nonce format, each at most 4 KiB. Read-only
 preflight leaves them untouched; after acquiring the lifecycle lock, publication
@@ -173,6 +193,9 @@ The iframe receives neither engine TLS keys, CA files, model/Sessions credential
 nor the engine cookie. Reopen the adapter after an engine restart: each boot has
 a new `boot` value and CSRF cookie. TLS Secret rotation also requires an engine
 restart and adapter reopening. No browser sign-in or identity proof is implied.
+
+Requests with a nonempty URL `RawPath` are refused with 404 before routing,
+including encoded separators or alternative encodings of otherwise allowed paths.
 
 The runtime's exact surface is:
 

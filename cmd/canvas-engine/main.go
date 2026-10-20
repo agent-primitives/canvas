@@ -41,7 +41,13 @@ type engine struct {
 
 func (e *engine) Close() { e.close() }
 
-func startEngine(ctx context.Context, cfg config) (_ *engine, err error) {
+func startEngine(ctx context.Context, cfg config) (*engine, error) {
+	return startEngineWithClock(ctx, cfg, time.Now)
+}
+
+// The clock affects readiness only; TLS verification and startup validity use
+// real time. Keeping it local avoids a mutable global clock in serving code.
+func startEngineWithClock(ctx context.Context, cfg config, now func() time.Time) (_ *engine, err error) {
 	if err = cfg.validate(); err != nil {
 		return nil, err
 	}
@@ -52,7 +58,7 @@ func startEngine(ctx context.Context, cfg config) (_ *engine, err error) {
 	if err = definition.RequireManualRuntime(); err != nil {
 		return nil, err
 	}
-	binding := hostingRecord{Version: 1, InstanceID: cfg.InstanceID, DefinitionDigest: definition.Digest, SessionsEndpoint: cfg.SessionsEndpoint}
+	binding := hostingRecord{Version: 1, InstanceID: cfg.InstanceID, DefinitionDigest: definition.Digest, SessionsEndpoint: cfg.SessionsEndpoint, AuthMode: cfg.AuthMode, TrustedNetwork: cfg.TrustedNetwork}
 	if err = preflightState(cfg.StateDirectory, binding); err != nil {
 		return nil, err
 	}
@@ -82,6 +88,10 @@ func startEngine(ctx context.Context, cfg config) (_ *engine, err error) {
 	}
 	if now := time.Now(); now.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
 		return nil, errors.New("engine TLS certificate is outside its validity period")
+	}
+	expires, err := loadedTLSExpiry(certificate, ca)
+	if err != nil {
+		return nil, err
 	}
 	cleanups := []func(){}
 	var once sync.Once
@@ -149,6 +159,10 @@ func startEngine(ctx context.Context, cfg config) (_ *engine, err error) {
 	readyMux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
+		if !now().Before(expires) {
+			http.Error(w, "loaded TLS material expired; renew and restart", http.StatusServiceUnavailable)
+			return
+		}
 		io.WriteString(w, readyBody)
 	})
 	readyServer := &http.Server{Handler: readyMux, ReadHeaderTimeout: time.Second, ReadTimeout: time.Second, WriteTimeout: time.Second, IdleTimeout: time.Second}
@@ -172,6 +186,10 @@ func hostedHandler(c *canvas.Canvas, origin, boot string) (http.Handler, error) 
 	c.RegisterAPIRoutes(routes)
 	api := http.StripPrefix("/engine", routes)
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.RawPath != "" {
+			http.NotFound(w, r)
+			return
+		}
 		path := r.URL.Path
 		if r.Method == http.MethodPost && (path == "/api/announcement" || strings.HasPrefix(path, "/api/announcement/") || path == "/engine/api/announcement" || strings.HasPrefix(path, "/engine/api/announcement/")) {
 			w.Header().Set("Content-Type", "application/json")
