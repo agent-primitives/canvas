@@ -41,6 +41,13 @@ type flowCommand struct {
 	Digest string `json:"digest"`
 }
 
+// Keep exact input bytes outside RawMessage: indented ledger encoding rewrites
+// RawMessage whitespace, but request-key equality and frozen inputs are byte-bound.
+type flowRunRecord struct {
+	FlowRun
+	InputBytes []byte `json:"inputBytes,omitempty"`
+}
+
 // FlowRun is a detached snapshot, never mutable execution authority.
 type FlowRun struct {
 	ID             string                  `json:"id"`
@@ -79,7 +86,7 @@ func terminalFlow(s string) bool {
 func (c *Canvas) flowLocked(id string) *FlowRun {
 	for i := range c.data.Flows {
 		if c.data.Flows[i].ID == id {
-			return &c.data.Flows[i]
+			return &c.data.Flows[i].FlowRun
 		}
 	}
 	return nil
@@ -87,6 +94,29 @@ func (c *Canvas) flowLocked(id string) *FlowRun {
 func (c *Canvas) activeFlowLocked() bool {
 	for _, f := range c.data.Flows {
 		if !terminalFlow(f.State) {
+			return true
+		}
+	}
+	return false
+}
+
+// flowAdmissionBusyLocked shares the reservation mutex with all native work.
+func (c *Canvas) flowAdmissionBusyLocked() bool {
+	if c.activeFlowLocked() || c.ctx.Err() != nil {
+		return true
+	}
+	for _, a := range c.data.Attempts {
+		if a.Status == "queued" || a.Status == "running" || a.Status == "uncertain" {
+			return true
+		}
+	}
+	for _, r := range c.data.Recoveries {
+		if r.Status == "pending" || r.Status == "uncertain" {
+			return true
+		}
+	}
+	for _, q := range c.conversation.Entries {
+		if q.Status == "queued" || q.Status == "running" || q.Status == "uncertain" {
 			return true
 		}
 	}
@@ -187,18 +217,12 @@ func (c *Canvas) StartFlow(ctx context.Context, r FlowStart) (FlowRun, error) {
 			if !same {
 				return FlowRun{}, ErrFlowConflict
 			}
-			return cloneFlowRun(f), nil
+			return cloneFlowRun(f.FlowRun), nil
 		}
 	}
-	if c.activeFlowLocked() || c.ctx.Err() != nil {
+	if c.flowAdmissionBusyLocked() {
 		c.mu.Unlock()
 		return FlowRun{}, ErrFlowBusy
-	}
-	for _, a := range c.data.Attempts {
-		if a.Status == "running" || a.Status == "queued" || a.Status == "uncertain" {
-			c.mu.Unlock()
-			return FlowRun{}, ErrFlowBusy
-		}
 	}
 	owner, err := c.executionOwnerLocked()
 	c.mu.Unlock()
@@ -221,7 +245,13 @@ func (c *Canvas) StartFlow(ctx context.Context, r FlowStart) (FlowRun, error) {
 	}
 	f := FlowRun{ID: ID(), Flow: r.Flow, RequestKey: r.RequestKey, Inputs: bytes.Clone(r.Inputs), Definition: c.definition.Digest, StartBase: base, ExecutionOwner: owner, RequestedBy: who, Role: r.Role, AgentRuns: r.AgentRuns, State: "starting", Accepted: map[string]string{}, Commands: map[string]flowCommand{}}
 	c.mu.Lock()
-	c.data.Flows = append(c.data.Flows, f)
+	// Native question/recovery claims also reserve under mu. Recheck at the
+	// insertion boundary, not only before reading external workspace state.
+	if c.flowAdmissionBusyLocked() {
+		c.mu.Unlock()
+		return FlowRun{}, ErrFlowBusy
+	}
+	c.data.Flows = append(c.data.Flows, flowRunRecord{FlowRun: f, InputBytes: bytes.Clone(r.Inputs)})
 	c.mu.Unlock()
 	err = c.dispatchFlowLocked(ctx, f.ID, sharedspace.ReviewActor{}, "")
 	result, _ := c.GetFlow(context.Background(), f.ID)
@@ -323,7 +353,7 @@ func (c *Canvas) observeFlowAttemptLocked(a *attempt) {
 		return
 	}
 	f := c.flowLocked(a.FlowRun)
-	if f == nil || f.Attempt != a.ID || terminalFlow(f.State) || f.State == "uncertain" {
+	if f == nil || f.Attempt != a.ID || f.State != "running" {
 		return
 	}
 	if a.Status == "proposed" && a.Proposal != "" {
@@ -620,6 +650,9 @@ func (c *Canvas) CancelFlow(ctx context.Context, r FlowCancel) (FlowRun, error) 
 func (c *Canvas) reopenFlowsLocked() {
 	for i := range c.data.Flows {
 		f := &c.data.Flows[i]
+		if f.InputBytes != nil {
+			f.Inputs = bytes.Clone(f.InputBytes)
+		}
 		if !terminalFlow(f.State) {
 			f.State = "uncertain"
 			f.Reason = "Workflow reopened; explicit reconciliation is required before further dispatch."

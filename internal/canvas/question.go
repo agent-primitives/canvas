@@ -25,6 +25,9 @@ func questionBinding(a *attempt) bool {
 func (c *Canvas) questionBusyLocked(session string) bool {
 	return c.turnBusyLocked(session) || c.recoveryBusyLocked(session, "")
 }
+func (c *Canvas) askBusyLocked(session string) bool {
+	return c.activeFlowLocked() || c.questionBusyLocked(session)
+}
 func (c *Canvas) turnBusyLocked(session string) bool {
 	for _, a := range c.data.Attempts {
 		if a.Session == session && (a.Status == "queued" || a.Status == "running") {
@@ -90,7 +93,7 @@ func (c *Canvas) AskContext(ctx context.Context, runID, text, role string) (stri
 		return "", ErrQuestionsUnsupported
 	}
 	a := *original
-	if c.questionBusyLocked(a.Session) {
+	if c.askBusyLocked(a.Session) {
 		c.mu.Unlock()
 		return "", ErrQuestionBusy
 	}
@@ -134,7 +137,7 @@ func (c *Canvas) AskContext(ctx context.Context, runID, text, role string) (stri
 	if c.ctx.Err() != nil {
 		return "", errors.New("canvas stopping")
 	}
-	if c.questionBusyLocked(a.Session) {
+	if c.askBusyLocked(a.Session) {
 		return "", ErrQuestionBusy
 	}
 	if err := c.appendConversationLocked(entry); err != nil {

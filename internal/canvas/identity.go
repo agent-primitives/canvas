@@ -86,6 +86,9 @@ func (c *Canvas) ReviewContext(ctx context.Context, id, action, role string) (sh
 	return c.reviewFlowLocked(ctx, id, action, role, nil)
 }
 func (c *Canvas) reviewProposalLocked(ctx context.Context, id, action, role string, intent func() error) (sharedspace.Proposal, error) {
+	if action != "accept" && action != "reject" {
+		return sharedspace.Proposal{}, errors.New("invalid review action")
+	}
 	if _, err := c.actionIdentity(ctx, role); err != nil {
 		return sharedspace.Proposal{}, err
 	}

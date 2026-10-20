@@ -87,7 +87,7 @@ type attempt struct {
 	FlowStage    string            `json:"flowStage,omitempty"`
 }
 type ledger struct {
-	Flows []FlowRun `json:"flows,omitempty"`
+	Flows []flowRunRecord `json:"flows,omitempty"`
 	// ExecutionOwner binds this state to one configured service identity once a
 	// service-owned attempt is journaled; rotation requires new state.
 	ExecutionOwner   api.IdentityRef         `json:"executionOwner,omitzero"`
