@@ -29,6 +29,8 @@ import (
 )
 
 type Run struct {
+	FlowRun  string `json:"flowRun,omitempty"`
+	FlowStep string `json:"flowStep,omitempty"`
 	// Reviewer is the legacy alias for the verified requester, never an owner.
 	Reviewer sessionauth.Identity `json:"reviewer,omitzero"`
 	// ExecutionOwner is the Sessions owner journaled before dispatch. Actor stays
@@ -82,8 +84,10 @@ type attempt struct {
 	BundleDigest string            `json:"bundleDigest,omitempty"`
 	Harness      string            `json:"harness,omitempty"`
 	ExpectedSeq  *int64            `json:"expectedSeq,omitempty"`
+	FlowStage    string            `json:"flowStage,omitempty"`
 }
 type ledger struct {
+	Flows []flowRunRecord `json:"flows,omitempty"`
 	// ExecutionOwner binds this state to one configured service identity once a
 	// service-owned attempt is journaled; rotation requires new state.
 	ExecutionOwner   api.IdentityRef         `json:"executionOwner,omitzero"`
@@ -155,8 +159,9 @@ type Canvas struct {
 	data         ledger
 	conversation conversationLedger
 	// service is configured before serving; nil means the local default client.
-	service *ExecutionService
-	errors  []string
+	service     *ExecutionService
+	flowOptions *FlowRuntimeOptions
+	errors      []string
 	// Instance-local filesystem boundary; nil uses the real directory sync.
 	syncDirectory func(string) error
 }
@@ -242,6 +247,7 @@ func openCanvas(root string, space sharedspace.SharedSpace, cl *client.Client, a
 			addActivity(a, "interrupted", a.Completed)
 		}
 	}
+	c.reopenFlowsLocked()
 	if !validRole(c.data.Role) {
 		c.data.Role = "GM"
 	}
@@ -372,6 +378,11 @@ func (c *Canvas) Manual(agent, slug, request, role string) (string, error) {
 	return c.ManualContext(context.Background(), agent, slug, request, role)
 }
 func (c *Canvas) ManualContext(ctx context.Context, agent, slug, request, role string) (string, error) {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+	if err := c.competingFlow(); err != nil {
+		return "", err
+	}
 	identity, requestedBy, err := c.requester(ctx, role)
 	if err != nil {
 		return "", err
@@ -410,6 +421,7 @@ func (c *Canvas) update(id string, f func(*attempt)) error {
 	}
 	previousActivity := len(a.Activity)
 	f(a)
+	c.observeFlowAttemptLocked(a)
 	if err := c.saveLocked(); err != nil {
 		// Only an unpersisted finish from this update is uncertain. A later
 		// bookkeeping failure must not erase an already-recorded completion.
@@ -425,6 +437,12 @@ func (c *Canvas) update(id string, f func(*attempt)) error {
 	return nil
 }
 func (c *Canvas) persistenceFailureLocked(a *attempt) {
+	for i := range c.data.Flows {
+		if !terminalFlow(c.data.Flows[i].State) {
+			c.data.Flows[i].State = "uncertain"
+			c.data.Flows[i].Reason = "Canvas persistence failed; no automatic dispatch."
+		}
+	}
 	message := "Canvas state persistence failed. Restore writable storage; no automatic retry will occur."
 	seen := false
 	for _, current := range c.errors {
@@ -545,6 +563,11 @@ func (c *Canvas) execute(id string) {
 			finish(errors.New("bundle execution config unsupported"))
 			return
 		}
+		if a.FlowRun != "" {
+			if err := c.update(id, func(saved *attempt) { saved.FlowStage = "create-intent" }); err != nil {
+				return
+			}
+		}
 		sess, err := sessions.CreateSession(ctx, &v1.Session{Metadata: &v1.ResourceMetadata{Name: a.RequestSummary, Project: c.project()}, Harness: binding.Harness, Model: b.Model, Labels: map[string]string{"canvas": c.project(), "agent": a.Agent, "mode": a.Mode}, Annotations: map[string]string{"bundle-digest": b.Digest, "authored-bundle-digest": b.AuthoredDigest, "accepted-base": a.Base, "attempt": a.ID}, Identity: &v1.IdentityRef{Principal: principal.Principal, Issuer: principal.Issuer, Subject: principal.Subject}})
 		if err != nil {
 			finish(err)
@@ -581,6 +604,9 @@ func (c *Canvas) execute(id string) {
 		a.Harness = session.GetHarness()
 		seq := session.GetLastSeq()
 		a.ExpectedSeq = &seq
+		if a.FlowRun != "" {
+			a.FlowStage = "exec-intent"
+		}
 	}); err != nil {
 		finish(err)
 		return
@@ -597,6 +623,11 @@ func (c *Canvas) execute(id string) {
 		finish(err)
 		return
 	}
+	if a.FlowRun != "" {
+		if err := c.update(id, func(saved *attempt) { saved.FlowStage = "completed" }); err != nil {
+			return
+		}
+	}
 	if reason, err := c.publishRunOutput(a, turn, session); err != nil {
 		if reason != "" {
 			failureReason = reason
@@ -612,7 +643,22 @@ func (c *Canvas) execute(id string) {
 func (c *Canvas) publishRunOutput(a attempt, turn *client.TurnResult, session *v1.Session) (string, error) {
 	id, uid, digest := a.ID, session.GetMetadata().GetUid(), session.GetAnnotations()["bundle-digest"]
 	failureReason := ""
-	changes, err := c.definition.Changes(a.Agent, turn.Output)
+	var changes map[string]string
+	var err error
+	if a.FlowRun != "" {
+		c.publicationMu.Lock()
+		defer c.publicationMu.Unlock()
+		if !c.flowPublishAllowed(a) {
+			return "Workflow binding is no longer publishable.", errOutputRejected
+		}
+		c.mu.Lock()
+		f := c.flowLocked(a.FlowRun)
+		flowID := f.Flow
+		c.mu.Unlock()
+		changes, err = c.definition.ChangesForStep(flowID, a.FlowStep, turn.Output)
+	} else {
+		changes, err = c.definition.Changes(a.Agent, turn.Output)
+	}
 	if err != nil {
 		return err.Error(), errors.Join(errOutputRejected, err)
 	}
@@ -627,8 +673,11 @@ func (c *Canvas) publishRunOutput(a attempt, turn *client.TurnResult, session *v
 			}
 		}
 	}
-	proposal, err := c.space.Propose(a.Base, changes, sharedspace.Attribution{ReadInputs: readInputs, Suite: a.Suite.Clone(), Agent: a.Agent, BundleDigest: digest, AuthoredBundleDigest: session.GetAnnotations()["authored-bundle-digest"], Session: uid, Actor: a.Actor, Run: a.ID, Sources: a.Sources, ExecutionOwner: a.ExecutionOwner, RequestedBy: a.RequestedBy, TriggeredBy: a.TriggeredBy, TriggeringReview: a.TriggeringReview})
+	proposal, err := c.space.Propose(a.Base, changes, sharedspace.Attribution{ReadInputs: readInputs, Suite: a.Suite.Clone(), Agent: a.Agent, BundleDigest: digest, AuthoredBundleDigest: session.GetAnnotations()["authored-bundle-digest"], Session: uid, Actor: a.Actor, Run: a.ID, Sources: a.Sources, ExecutionOwner: a.ExecutionOwner, RequestedBy: a.RequestedBy, TriggeredBy: a.TriggeredBy, TriggeringReview: a.TriggeringReview, FlowRun: a.FlowRun, FlowStep: a.FlowStep})
 	if err != nil {
+		if a.FlowRun != "" && proposal.ID != "" {
+			_ = c.setFlow(a.FlowRun, "uncertain", "Proposal is durable but publication bookkeeping is ambiguous; no review or automatic dispatch.")
+		}
 		if proposal.ID != "" {
 			failureReason = "Proposal published to Git; review metadata persistence failed. Restore writable storage and refresh."
 			if saveErr := c.update(id, func(a *attempt) {
@@ -740,7 +789,7 @@ func (c *Canvas) Review(id, action, role string) (sharedspace.Proposal, error) {
 	return c.ReviewContext(context.Background(), id, action, role)
 }
 func (c *Canvas) review(id, action, role string) (sharedspace.Proposal, error) {
-	if !validRole(role) {
+	if !c.flowRole(role) {
 		return sharedspace.Proposal{}, errors.New("invalid demo role")
 	}
 	if action == "reject" {
@@ -762,6 +811,11 @@ func (c *Canvas) Regenerate(proposal, role string) (string, error) {
 // RegenerateContext captures the verified requester during admission; the
 // queued attempt itself runs under the execution service.
 func (c *Canvas) RegenerateContext(ctx context.Context, proposal, role string) (string, error) {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+	if err := c.competingFlow(); err != nil {
+		return "", err
+	}
 	identity, requestedBy, err := c.requester(ctx, role)
 	if err != nil {
 		return "", err
@@ -780,6 +834,9 @@ func (c *Canvas) RegenerateContext(ctx context.Context, proposal, role string) (
 		}
 	}
 	c.mu.Unlock()
+	if previous != nil && previous.FlowRun != "" {
+		return "", ErrFlowConflict
+	}
 	if previous == nil {
 		return "", fmt.Errorf("proposal attempt missing: %w", errNotFound)
 	}

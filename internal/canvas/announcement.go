@@ -61,11 +61,13 @@ type announcementDecision struct {
 	Reason   string
 }
 type announcementOperation struct {
-	Snapshot    announcement.Snapshot `json:"snapshot"`
-	Session     string                `json:"session,omitempty"`
-	InitialHead int64                 `json:"initialHead"`
-	Stage       string                `json:"stage"`
-	Decision    *announcementDecision `json:"decision,omitempty"`
+	FlowRun     string                  `json:"flowRun,omitempty"`
+	TriggeredBy sharedspace.ReviewActor `json:"triggeredBy,omitzero"`
+	Snapshot    announcement.Snapshot   `json:"snapshot"`
+	Session     string                  `json:"session,omitempty"`
+	InitialHead int64                   `json:"initialHead"`
+	Stage       string                  `json:"stage"`
+	Decision    *announcementDecision   `json:"decision,omitempty"`
 	// The engine owns the session; the requester is attribution only.
 	ExecutionOwner api.IdentityRef         `json:"executionOwner,omitzero"`
 	RequestedBy    sharedspace.ReviewActor `json:"requestedBy,omitzero"`
@@ -99,9 +101,14 @@ func (c *Canvas) saveAnnouncement(op announcementOperation) error {
 	for i := range c.data.Announcements {
 		if c.data.Announcements[i].Snapshot.Operation == op.Snapshot.Operation {
 			c.data.Announcements[i] = op
+			c.observeFlowActionLocked(op)
 			err := c.saveLocked()
 			if err != nil {
 				c.data.Announcements[i].Stage = "uncertain"
+				if f := c.flowLocked(op.FlowRun); f != nil {
+					f.State = "uncertain"
+					f.Reason = "Action bookkeeping could not be persisted."
+				}
 			}
 			return err
 		}
@@ -109,13 +116,28 @@ func (c *Canvas) saveAnnouncement(op announcementOperation) error {
 	return errAnnouncement
 }
 func (c *Canvas) RequestAnnouncement(ctx context.Context, action, proposal, role string) (string, error) {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+	if err := c.competingFlow(); err != nil {
+		return "", err
+	}
+	ps, err := c.space.Proposals()
+	if err != nil {
+		return "", err
+	}
+	for _, p := range ps {
+		if p.ID == proposal && p.Attribution.FlowRun != "" {
+			return "", ErrFlowConflict
+		}
+	}
+	return c.requestAnnouncementLocked(ctx, action, proposal, role, "")
+}
+func (c *Canvas) requestAnnouncementLocked(ctx context.Context, action, proposal, role, flowID string) (string, error) {
 	_, requestedBy, authErr := c.requester(ctx, role)
 	if authErr != nil {
 		return "", authErr
 	}
-	c.publicationMu.Lock()
-	defer c.publicationMu.Unlock()
-	if c.definition == nil || !validRole(role) {
+	if c.definition == nil || !c.flowRole(role) {
 		return "", errAnnouncement
 	}
 	a, ok := c.definition.actions[action]
@@ -173,7 +195,18 @@ func (c *Canvas) RequestAnnouncement(ctx context.Context, action, proposal, role
 	if c.service != nil {
 		c.data.ExecutionOwner = owner
 	}
-	op := announcementOperation{Snapshot: snapshot, Stage: "pending", ExecutionOwner: owner, RequestedBy: requestedBy}
+	op := announcementOperation{Snapshot: snapshot, Stage: "pending", ExecutionOwner: owner, RequestedBy: requestedBy, FlowRun: flowID}
+	if flowID != "" {
+		f := c.flowLocked(flowID)
+		if f == nil || f.Accepted[a.Document] != proposal {
+			c.mu.Unlock()
+			return "", ErrFlowConflict
+		}
+		f.Action = snapshot.Operation
+		f.State = "action"
+		op.RequestedBy = f.RequestedBy
+		op.TriggeredBy = requestedBy
+	}
 	c.data.Announcements = append(c.data.Announcements, op)
 	err = c.saveLocked()
 	if err != nil {
@@ -488,7 +521,7 @@ func (c *Canvas) DecideAnnouncement(ctx context.Context, id, role string, approv
 	}
 	c.publicationMu.Lock()
 	defer c.publicationMu.Unlock()
-	if !validRole(role) || !confirmation.Confirmed {
+	if !c.flowRole(role) || !confirmation.Confirmed {
 		return errAnnouncement
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -496,6 +529,12 @@ func (c *Canvas) DecideAnnouncement(ctx context.Context, id, role string, approv
 	op, v, err := c.confirmedAnnouncement(ctx, id, confirmation)
 	if err != nil {
 		return err
+	}
+	c.mu.Lock()
+	allowed := c.flowActionAllowedLocked(op)
+	c.mu.Unlock()
+	if !allowed || op.FlowRun != "" && v.Newer {
+		return ErrFlowConflict
 	}
 	if v.Status != "pending-approval" && v.Status != "approved" && v.Status != "denied" || v.Confirmation.RequestSeq < 1 || v.Concluded {
 		return errAnnouncement
@@ -543,7 +582,7 @@ func (c *Canvas) resumeAnnouncement(ctx context.Context, id, role string, confir
 	}
 	c.publicationMu.Lock()
 	defer c.publicationMu.Unlock()
-	if !validRole(role) || !confirmation.Confirmed {
+	if !c.flowRole(role) || !confirmation.Confirmed {
 		return errAnnouncement
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -551,6 +590,13 @@ func (c *Canvas) resumeAnnouncement(ctx context.Context, id, role string, confir
 	op, v, err := c.confirmedAnnouncement(ctx, id, confirmation)
 	if err != nil {
 		return err
+	}
+	c.mu.Lock()
+	cleanup := !recover && c.flowDeniedCleanupLocked(op)
+	allowed := c.flowActionAllowedLocked(op) || cleanup
+	c.mu.Unlock()
+	if !allowed || !cleanup && op.FlowRun != "" && v.Newer || cleanup && v.Status != "denied" {
+		return ErrFlowConflict
 	}
 	if recover {
 		if v.Status != "recoverable" {
@@ -588,7 +634,7 @@ func (c *Canvas) resumeAnnouncement(ctx context.Context, id, role string, confir
 	if err != nil {
 		return sessionsFailure(err, errAnnouncement)
 	}
-	return nil
+	return c.finishFlowAction(ctx, op)
 }
 func (c *Canvas) AbandonAnnouncement(ctx context.Context, id, role string, confirmation AnnouncementConfirmation) error {
 	if _, err := c.actionIdentity(ctx, role); err != nil {
@@ -596,7 +642,7 @@ func (c *Canvas) AbandonAnnouncement(ctx context.Context, id, role string, confi
 	}
 	c.publicationMu.Lock()
 	defer c.publicationMu.Unlock()
-	if !validRole(role) || !confirmation.Confirmed {
+	if !c.flowRole(role) || !confirmation.Confirmed {
 		return errAnnouncement
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -605,7 +651,7 @@ func (c *Canvas) AbandonAnnouncement(ctx context.Context, id, role string, confi
 	if err != nil {
 		return err
 	}
-	if view.Status == "historical" {
+	if op.FlowRun != "" || view.Status == "historical" {
 		return errAnnouncement
 	}
 	if op.Session == "" {

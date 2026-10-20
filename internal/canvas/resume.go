@@ -232,7 +232,7 @@ func (c *Canvas) inspectResume(ctx context.Context, run, message, ignore string)
 	unavailable := ResumeInspection{Reason: resumeUnavailable}
 	c.mu.Lock()
 	a, input, ok := c.resumeTargetLocked(run, message)
-	if !ok {
+	if !ok || a.FlowRun != "" || c.activeFlowLocked() {
 		c.mu.Unlock()
 		return unavailable
 	}
@@ -325,7 +325,7 @@ func (c *Canvas) ConfirmResume(ctx context.Context, run, message, role string, c
 func (c *Canvas) claimResume(run, message, role string, inspection ResumeInspection, confirmation ResumeConfirmation) (resumeAction, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.ctx.Err() != nil || c.questionVersionLocked(inspection.Session) != inspection.SessionVersion || c.questionBusyLocked(inspection.Session) {
+	if c.activeFlowLocked() || c.ctx.Err() != nil || c.questionVersionLocked(inspection.Session) != inspection.SessionVersion || c.questionBusyLocked(inspection.Session) {
 		return resumeAction{}, errResumeConflict
 	}
 	for _, previous := range c.data.Recoveries {
