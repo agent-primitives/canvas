@@ -54,6 +54,9 @@ func startWithOptions(root, state, address, definitionPath string, options engin
 		return nil, err
 	}
 	remote := options.remote
+	if options.flowAgentRuns > 0 && definitionPath == "" {
+		return nil, errors.New("-flow-agent-runs requires an explicit -definition and separate -state")
+	}
 	host, _, e := net.SplitHostPort(address)
 	if e != nil || host != "127.0.0.1" {
 		return nil, errors.New("demo listener must use literal 127.0.0.1:port")
@@ -64,9 +67,16 @@ func startWithOptions(root, state, address, definitionPath string, options engin
 	} else if !filepath.IsAbs(selectedDefinition) {
 		selectedDefinition = filepath.Join(root, selectedDefinition)
 	}
-	definition, e := canvas.LoadManualDefinitionWithResolver(selectedDefinition, contract.NewReleaseResolver(filepath.Join(state, "suite-cache")))
+	load := canvas.LoadManualDefinitionWithResolver
+	if options.flowAgentRuns > 0 {
+		load = canvas.LoadGenericDefinitionWithResolver
+	}
+	definition, e := load(selectedDefinition, contract.NewReleaseResolver(filepath.Join(state, "suite-cache")))
 	if e != nil {
 		return nil, e
+	}
+	if options.flowAgentRuns > 0 && len(definition.Flows) == 0 {
+		return nil, canvas.ErrFlowRuntime
 	}
 	// Refuse before state, providers or sessions RPCs: the human credential is
 	// never relabelled as the execution owner.
@@ -96,8 +106,10 @@ func startWithOptions(root, state, address, definitionPath string, options engin
 	provider := func(_ context.Context, req api.ModelRequest) (api.ModelResponse, error) {
 		calls.Add(1)
 		var input struct {
-			Mode  string `json:"mode"`
-			Agent string `json:"agent"`
+			Mode     string            `json:"mode"`
+			Agent    string            `json:"agent"`
+			Request  string            `json:"request"`
+			Evidence map[string]string `json:"evidence"`
 		}
 		if len(req.Messages) == 0 || json.Unmarshal([]byte(req.Messages[len(req.Messages)-1].Text()), &input) != nil || input.Mode != "documents" {
 			return api.ModelResponse{}, errors.New("demo accepts document requests only")
@@ -110,6 +122,13 @@ func startWithOptions(root, state, address, definitionPath string, options engin
 			changes = append(changes, map[string]string{"document": "review", "operation": "replace", "content": definition.Seed["review.json"]})
 		default:
 			return api.ModelResponse{}, errors.New("unsupported demo agent")
+		}
+		if options.flowAgentRuns > 0 {
+			var err error
+			changes, err = flowFixtureChanges(definition, input.Agent, input.Request, input.Evidence)
+			if err != nil {
+				return api.ModelResponse{}, err
+			}
 		}
 		raw, e := json.Marshal(map[string]any{"changes": changes})
 		if e != nil {
@@ -159,7 +178,12 @@ func startWithOptions(root, state, address, definitionPath string, options engin
 		return nil, e
 	}
 	cleanups = append(cleanups, func() { space.Close() })
-	c, e := canvas.OpenDefined(filepath.Join(state, "canvas"), space, cl, sessionsAddress, definition, contract.LocalBinder{}, archives)
+	var c *canvas.Canvas
+	if options.flowAgentRuns > 0 {
+		c, e = canvas.OpenFlowRuntime(filepath.Join(state, "canvas"), space, cl, sessionsAddress, definition, contract.LocalBinder{}, canvas.FlowRuntimeOptions{MaxAgentRuns: options.flowAgentRuns}, archives)
+	} else {
+		c, e = canvas.OpenDefined(filepath.Join(state, "canvas"), space, cl, sessionsAddress, definition, contract.LocalBinder{}, archives)
+	}
 	if e != nil {
 		return nil, e
 	}
@@ -196,6 +220,9 @@ func startWithOptions(root, state, address, definitionPath string, options engin
 		} else if options.trustedEndpoint != "" {
 			info = map[string]any{"mode": "trusted-loopback-sessions", "identity": "not exercised (unauthenticated trusted connection)", "boot": boot, "modelCalls": nil, "executorCalls": nil, "headlessPrefix": "/engine"}
 		}
+		if options.flowAgentRuns > 0 {
+			info["flowRuntime"], info["requesterRole"] = true, "GM"
+		}
 		json.NewEncoder(w).Encode(info)
 	})}
 	if remote != nil {
@@ -230,6 +257,7 @@ func main() {
 	state := flags.String("state", ".state/copilot-northwind", "separate private demo state")
 	address := flags.String("listen", "127.0.0.1:18878", "literal loopback HTTP listener")
 	definition := flags.String("definition", "", "opt-in definition; requires explicit separate -state")
+	flowRuns := flags.Int("flow-agent-runs", 0, "opt into local declared flows with this positive operator attempt ceiling; requires -definition and separate -state")
 	sessionsConfig := flags.String("sessions-config", "", "human sessions TLS/token-source configuration; requires separate -state and a verified service binding (not supplied by CLI)")
 	trusted := flags.String("sessions-trusted-loopback", "", "explicit unauthenticated 127.0.0.1:port sessions; identity not exercised; requires separate -state")
 	profile := flags.String("model-profile", "", "explicit embedded hosted or offline real provider; requires separate -state")
@@ -240,7 +268,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "unexpected arguments")
 		os.Exit(1)
 	}
-	options := engineOptions{trustedEndpoint: *trusted, modelProfile: *profile, modelBase: *base, keyFile: *key}
+	options := engineOptions{trustedEndpoint: *trusted, modelProfile: *profile, modelBase: *base, keyFile: *key, flowAgentRuns: *flowRuns}
 	if err := options.validate(*sessionsConfig != ""); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

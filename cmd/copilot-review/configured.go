@@ -18,6 +18,7 @@ import (
 )
 
 type engineOptions struct {
+	flowAgentRuns   int
 	remote          *remoteEngine
 	trustedEndpoint string
 	modelProfile    string
@@ -29,6 +30,9 @@ var errEngineOptions = errors.New("invalid provider or sessions options")
 
 func (o engineOptions) validate(authenticated bool) error {
 	bad := func(message string) error { return fmt.Errorf("%w: %s", errEngineOptions, message) }
+	if o.flowAgentRuns < 0 || (o.flowAgentRuns > 0 && (authenticated || o.trustedEndpoint != "")) {
+		return bad("-flow-agent-runs must be positive and uses embedded local Sessions only")
+	}
 	if (authenticated && o.trustedEndpoint != "") || ((authenticated || o.trustedEndpoint != "") && o.modelProfile != "") {
 		return bad("select one embedded model profile, authenticated sessions config, or trusted-loopback sessions endpoint")
 	}

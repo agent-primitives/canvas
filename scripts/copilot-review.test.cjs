@@ -30,6 +30,17 @@ test('thin adapter keeps engine cookie private and forwards only reviewed routes
   response = await fetch(bridge.origin + '/api/role', { method: 'POST', headers, body: '{"role":"owner"}' }); assert.equal(response.status, 404);
   response = await fetch(bridge.origin + '/api/announcement/decision', { method: 'POST', headers, body: '{"approved":false}' }); assert.equal(response.status, 200);
   assert.deepEqual(observed, [['GET', '/api/state'], ['POST', '/api/announcement/decision']]);
+  for (const route of ['/api/flows', '/api/flow?run=known']) {
+    response = await fetch(bridge.origin + route, { headers }); assert.equal(response.status, 200);
+  }
+  for (const name of ['start', 'changes', 'retry', 'cancel', 'reconcile', 'advance', 'verify']) {
+    response = await fetch(bridge.origin + '/api/flow/' + name, { method: 'POST', headers, body: '{}' }); assert.equal(response.status, 200);
+  }
+  response = await fetch(bridge.origin + '/api/flow/unknown', { method: 'POST', headers, body: '{}' }); assert.equal(response.status, 404);
+  const largeStart = JSON.stringify({ flow: 'release', requestKey: 'bounded', role: 'GM', inputs: { topic: 'x'.repeat(20000) }, agentRuns: 12 });
+  response = await fetch(bridge.origin + '/api/flow/start', { method: 'POST', headers, body: largeStart }); assert.equal(response.status, 200, 'Start needs more than the old decision envelope');
+  response = await fetch(bridge.origin + '/api/flow/start', { method: 'POST', headers, body: 'x'.repeat(72 * 1024 + 1) }); assert.equal(response.status, 413);
+  response = await fetch(bridge.origin + '/api/flow/changes', { method: 'POST', headers, body: 'x'.repeat(16385) }); assert.equal(response.status, 413, 'other flow commands keep the old bridge bound');
   response = await fetch(bridge.origin + '/api/review', { method: 'POST', headers: { 'x-canvas-review-token': token, 'Content-Type': 'application/json' }, body: '{}' }); assert.equal(response.status, 403);
   response = await fetch(bridge.origin + '/api/state', { headers: { ...headers, 'Sec-Fetch-Site': 'cross-site' } }); assert.equal(response.status, 403);
   const wrongHost = await new Promise((resolve, reject) => {

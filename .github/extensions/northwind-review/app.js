@@ -3,17 +3,18 @@ const token = new URLSearchParams(location.hash.slice(1)).get('token');
 history.replaceState(null, '', location.pathname);
 let state, demo, selected = '', view, documentKey = '', actionKey = '', pendingRun = '', busy = false, refreshing = false, online = false, refreshPromise;
 let selectionGeneration = 0, inspected = '', reopen = false, outcomeKey = '', actionError = '';
-const inspectionKey = () => `${selectionGeneration}:${selected}`;
+let flowUI, flowRecordKey = '';
+const inspectionKey = () => `${selectionGeneration}:${selected}:${flowUI?.key() || ''}`;
 function setText(id, text) { if ($(id).textContent !== text) $(id).textContent = text; }
 function announce(message) { setText('status', message); }
-const reviewRole = () => demo?.reviewerRole || 'GM';
+const reviewRole = () => flowUI?.gateRole() || demo?.reviewerRole || 'GM';
 const remoteSessions = () => ['authenticated-sessions', 'trusted-loopback-sessions'].includes(demo?.mode);
 
 async function api(path, body) {
   try {
     const response = await fetch(path, { method: body ? 'POST' : 'GET', headers: { 'x-canvas-review-token': token || '', 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined });
     const result = await response.json();
-    if (!response.ok) throw Object.assign(new Error(result.error || 'Review action unavailable'), { code: result.code, recovery: result.recovery, uncertain: !!body && response.status >= 500 });
+    if (!response.ok) throw Object.assign(new Error(result.error || 'Review action unavailable'), { code: result.code, status: response.status, recovery: result.recovery, uncertain: !!body && response.status >= 500 });
     return result;
   } catch (error) {
     if (body && error.uncertain === undefined) error.uncertain = true;
@@ -26,18 +27,22 @@ function clearConfirmations() { $('document-confirm').checked = false; $('action
 function controls() {
   const p = proposal(), enabled = online && !reopen && !busy && !pendingRun;
   const ready = enabled && inspected === inspectionKey();
-  $('draft').disabled = !enabled;
+  $('draft').hidden = !!flowUI; $('draft').disabled = !enabled || !!flowUI;
+  $('flow-open').hidden = !flowUI;
   $('refresh').disabled = busy || refreshing;
   $('proposal').disabled = busy || !online || reopen;
-  $('document-confirm').disabled = !enabled || !p;
-  $('accept').disabled = !ready || p?.status !== 'pending' || !$('document-confirm').checked;
-  $('reject').disabled = !ready || !['pending', 'stale'].includes(p?.status) || !$('document-confirm').checked;
+  const gate = !flowUI || flowUI.isGate(selected);
+  $('document-confirm').disabled = !enabled || !p || !gate;
+  $('accept').disabled = !ready || !gate || p?.status !== 'pending' || !$('document-confirm').checked;
+  $('reject').disabled = !ready || !gate || !['pending', 'stale'].includes(p?.status) || !$('document-confirm').checked;
   $('verify').disabled = !ready || !run() || remoteSessions();
   $('request').disabled = !ready || p?.status !== 'accepted' || !Object.hasOwn(p?.changes || {}, 'announcement.md') || !!view;
   $('action-confirm').disabled = !enabled || !view || view.concluded;
-  const decision = ready && view?.status === 'pending-approval' && $('action-confirm').checked;
+  const actionReady = ready && (!flowUI || flowUI.actionAllowed());
+  const decision = actionReady && view?.status === 'pending-approval' && $('action-confirm').checked;
   $('approve').disabled = !decision; $('deny').disabled = !decision;
-  $('continue').disabled = !ready || !view || view.concluded || !['approved', 'denied'].includes(view.status) || !$('action-confirm').checked;
+  $('continue').disabled = !actionReady || !view || view.concluded || !['approved', 'denied'].includes(view.status) || !$('action-confirm').checked;
+  flowUI?.controls(enabled, ready, $('document-confirm').checked, view, gate);
   $('verify-action').disabled = !ready || view?.status !== 'simulated' || !view?.concluded || remoteSessions();
   setText('replay-help', remoteSessions() ? 'Remote replay diagnostics are unavailable. No 0/0 claim is made.' : !online || reopen ? 'Reconnect before verifying replay.' : view?.status === 'simulated' && view?.concluded ? 'Verify recorded integrity, not approval or evaluation quality.' : 'Action replay verification is available after a completed simulation, not a denial.');
 }
@@ -74,14 +79,15 @@ function renderReleaseEvidence() {
 }
 function stage() {
   const p = proposal(), completed = p && !['pending', 'stale'].includes(p.status);
-  $('empty').hidden = !!p; $('review').hidden = !p;
+  $('empty').hidden = !!p || !!flowUI; $('review').hidden = !p && !flowUI?.current()?.action;
   $('draft').classList.toggle('secondary', !!p);
   $('document-stage').classList.toggle('current', !!p && !completed);
-  $('document-decision').hidden = !p || completed;
+  $('document-decision').hidden = !p || completed || (!!flowUI && !flowUI.isGate(selected));
   $('document-help').hidden = !!completed;
-  $('action-stage').hidden = p?.status !== 'accepted';
-  $('action-stage').classList.toggle('current', p?.status === 'accepted');
-  $('request').hidden = !!view;
+  $('flow-feedback-controls').hidden = !flowUI || completed || !flowUI.isGate(selected);
+  $('action-stage').hidden = flowUI ? !flowUI.current()?.action : p?.status !== 'accepted';
+  $('action-stage').classList.toggle('current', flowUI ? flowUI.actionAllowed() : p?.status === 'accepted');
+  $('request').hidden = !!view || !!flowUI;
   const deciding = view?.status === 'pending-approval', continuing = view && !view.concluded && ['approved', 'denied'].includes(view.status);
   $('action-decision').hidden = !deciding && !continuing;
   $('approve').hidden = !deciding; $('deny').hidden = !deciding; $('continue').hidden = !continuing;
@@ -103,13 +109,34 @@ function actionSummary() {
   return `Action: ${view.status}. Inspect the native evidence before proceeding.`;
 }
 async function render(generation) {
-  const proposals = state.proposals || [];
+  if (demo.flowRuntime) {
+    if (!flowUI) {
+      const { createFlowPanel } = await import('/flow.js');
+      flowUI = createFlowPanel({ api, action, selectionChanged: flowSelectionChanged, requesterRole: demo.requesterRole || 'GM' });
+    }
+    const snapshot = await api('/api/flows');
+    if (generation !== selectionGeneration || snapshot.head !== state.head) return false;
+    const prior = flowUI.current();
+    flowUI.update(snapshot, state);
+    const flowKey = flowUI.key();
+    if (flowKey !== flowRecordKey) {
+      if (prior?.id !== flowUI.current()?.id || prior?.proposal !== flowUI.current()?.proposal) {
+        selected = flowUI.current()?.proposal || flowUI.proposals().at(-1)?.id || '';
+        $('flow-feedback').value = '';
+      }
+      flowRecordKey = flowKey; documentKey = ''; actionKey = ''; inspected = ''; view = null; clearConfirmations(); controls();
+      setText('flow-proof', 'Flow replay not verified for this record.'); setText('flow-evidence', '');
+    }
+    if (!await flowUI.inspect() || generation !== selectionGeneration) return false;
+  }
+  const proposals = flowUI ? flowUI.proposals() : state.proposals || [];
   if (pendingRun) {
     const candidate = state.runs.find(item => item.id === pendingRun);
     if (candidate?.proposal) { selected = candidate.proposal; pendingRun = ''; }
     else if (candidate && ['failed', 'uncertain', 'refused'].includes(candidate.status)) { pendingRun = ''; actionError = 'Draft did not complete. Inspect the engine browser before trying again.'; }
   }
-  if (!proposals.some(item => item.id === selected)) selected = proposals.at(-1)?.id || '';
+  // Retain the authoritative target across a split flow/document-state read.
+  if (!proposals.some(item => item.id === selected)) selected = flowUI?.current()?.proposal || proposals.at(-1)?.id || '';
   const optionKey = JSON.stringify(proposals.map(p => [p.id, p.status]));
   if ($('proposal').dataset.key !== optionKey) {
     $('proposal').replaceChildren();
@@ -130,7 +157,7 @@ async function render(generation) {
     setText('identity', 'Identity not exercised. Roles are local attribution, not verified identity.');
     setText('engine-description', 'Real-model document proposals. Review documents before any separate action decision.');
   }
-  const p = proposal(), key = JSON.stringify([demo.boot, state.head, p]);
+  const p = proposal(), key = JSON.stringify([demo.boot, state.head, p, flowUI?.key()]);
   stage();
   if (key !== documentKey) {
     documentKey = ''; inspected = ''; clearConfirmations(); controls(); $('documents').replaceChildren();
@@ -163,7 +190,10 @@ async function render(generation) {
   }
   showReviewer('document-reviewer', p?.reviewer);
   const operation = state.announcements?.find(item => item.stage !== 'abandoned' && item.proposal === selected && item.action === 'announce');
-  const inspectedView = operation ? await api(`/api/announcement?id=${encodeURIComponent(operation.id)}`) : null;
+  const actionID = flowUI ? flowUI.current()?.action : operation?.id;
+  let inspectedView = null;
+  try { if (actionID) inspectedView = await api(`/api/announcement?id=${encodeURIComponent(actionID)}`); }
+  catch (error) { if (!flowUI || error.status !== 409 || error.recovery) throw error; }
   if (generation !== selectionGeneration) return false;
   view = inspectedView;
   const nextActionKey = JSON.stringify([demo.boot, view]);
@@ -175,12 +205,13 @@ async function render(generation) {
   $('evidence').textContent = view ? JSON.stringify(view, null, 2) : 'No action requested.';
   setText('draft-proof', !remoteSessions() && run()?.proof ? proofLabel(run().proof) : '');
   $('meter').textContent = remoteSessions() ? 'Remote model/executor counts are unknown. Replay diagnostics are not reported by this host.' : demo.mode === 'deterministic-northwind' ? `Fixture provider calls this boot: ${demo.providerCalls}. Real model calls: 0.` : `Provider invocations this boot: ${demo.providerInvocations}. Completion-token ceiling: ${demo.completionTokenCeiling}. Not a billing ledger.`;
-  stage();
-  const nextOutcome = JSON.stringify([selected, p?.status, view?.status, view?.concluded, pendingRun]);
+  stage(); flowUI?.renderStatus(view);
+  const nextOutcome = JSON.stringify([selected, p?.status, view?.status, view?.concluded, pendingRun, flowUI?.key()]);
   if (nextOutcome !== outcomeKey) {
     outcomeKey = nextOutcome;
     const actionOutcome = view?.status === 'approved' ? 'Approval recorded; not executed.' : view?.status === 'denied' ? (view.concluded ? 'Denial concluded without simulation.' : 'Denial recorded. Confirmation needed to conclude.') : view?.status === 'pending-approval' ? 'Action decision awaiting review.' : view?.status === 'simulated' && view.concluded ? 'Simulation concluded. Nothing sent or published.' : view ? 'Inspect the recorded action state.' : 'Documents accepted. Review the separate action.';
-    if (!actionError) announce(pendingRun ? 'Writer is preparing a draft…' : !p ? 'Start a writer draft. Review its documents before any action decision.' : p.status === 'pending' ? `Review ${Object.keys(p.changes).length} proposal documents, then accept or reject the complete proposal.` : p.status === 'stale' ? 'Proposal stale. Acceptance is unavailable. Reject it or create a new draft against the current documents.' : p.status === 'rejected' ? 'Documents rejected. No action approved. Start a new draft when ready.' : actionOutcome);
+    if (flowUI && !actionError) announce($('flow-status').textContent);
+    if (!flowUI && !actionError) announce(pendingRun ? 'Writer is preparing a draft…' : !p ? 'Start a writer draft. Review its documents before any action decision.' : p.status === 'pending' ? `Review ${Object.keys(p.changes).length} proposal documents, then accept or reject the complete proposal.` : p.status === 'stale' ? 'Proposal stale. Acceptance is unavailable. Reject it or create a new draft against the current documents.' : p.status === 'rejected' ? 'Documents rejected. No action approved. Start a new draft when ready.' : actionOutcome);
   }
   return true;
 }
@@ -229,6 +260,10 @@ async function action(callback, confirmation) {
   }
   catch (error) { actionError = error.uncertain ? 'The action may have been recorded; it was not retried. Inspect the refreshed record before another decision.' : error.message; announce(actionError); }
   finally { clearConfirmations(); busy = false; if (online) await refresh(); else controls(); }
+}
+function flowSelectionChanged() {
+  selectionGeneration++; selected = ''; inspected = ''; documentKey = ''; actionKey = ''; view = null; actionError = '';
+  clearConfirmations(); $('documents').replaceChildren(); $('snapshot').hidden = true; controls(); refresh();
 }
 $('draft').onclick = () => action(async () => { const result = await api('/api/run', { agent: 'writer', request: 'Draft the fictional local pilot PRD and announcement.', role: reviewRole() }); pendingRun = result.run; });
 $('refresh').onclick = () => refresh();
