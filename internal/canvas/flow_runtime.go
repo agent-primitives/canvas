@@ -45,7 +45,8 @@ type flowCommand struct {
 // RawMessage whitespace, but request-key equality and frozen inputs are byte-bound.
 type flowRunRecord struct {
 	FlowRun
-	InputBytes []byte `json:"inputBytes,omitempty"`
+	InputBytes []byte             `json:"inputBytes,omitempty"`
+	Reviews    []flowReviewIntent `json:"reviews,omitempty"`
 }
 
 // FlowRun is a detached snapshot, never mutable execution authority.
@@ -430,6 +431,7 @@ func (c *Canvas) beginFlowDecision(id, proposal, action string, who sharedspace.
 	}
 	f.State = "decision"
 	f.Reason = action + " intent pending for " + proposal
+	c.flowRecordLocked(id).Reviews = append(c.flowRecordLocked(id).Reviews, flowReviewIntent{Definition: f.Definition, Flow: f.Flow, Step: f.Step, Attempt: f.Attempt, Proposal: proposal, Base: c.findLocked(f.Attempt).Base, Action: action, Reviewer: who, RequestKey: key, Digest: digest, Feedback: feedback})
 	if key != "" {
 		f.Commands[key] = flowCommand{Digest: digest}
 	}
@@ -474,12 +476,19 @@ func (c *Canvas) reviewFlowLocked(ctx context.Context, id, action, role string, 
 		}
 		return p, err
 	}
-	if action == "reject" && change == nil {
-		err = c.setFlow(fid, "rejected", "Human rejected the current proposal.")
-		return p, err
-	}
 	c.mu.Lock()
 	f := c.flowLocked(fid)
+	c.markReviewAppliedLocked(fid, p)
+	if action == "reject" && change == nil {
+		f.State = "rejected"
+		f.Reason = "Human rejected the current proposal."
+		err = c.saveLocked()
+		if err != nil {
+			f.State = "uncertain"
+		}
+		c.mu.Unlock()
+		return p, err
+	}
 	if action == "accept" {
 		for name, doc := range c.definition.documents {
 			if _, ok := p.Changes[doc.path]; ok {
