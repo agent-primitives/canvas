@@ -36,6 +36,50 @@ inventory includes file modes, so use a normal checkout with 0644 source files
 and 0755 directories, not a checkout created under umask 077. Do not weaken inventory validation or
 rewrite artifact pins to accommodate different modes.
 
+## Opt into the local flow panel
+
+The manual demo above is unchanged. To use the declared draft → critique → revise
+workflow and its separate simulated-action gate, start a **new, dedicated instance**:
+
+```sh
+go run ./cmd/copilot-review -definition examples/northwind-prd/flow.yaml \
+  -state .state/copilot-flow -flow-agent-runs 12
+```
+
+Open the same extension described below. **Run on a topic** submits structured
+inputs and a selected attempt budget, bounded by both the definition and the
+operator ceiling. The starting accepted revision and definition digest are shown.
+Optional schema defaults are hints, not silently inserted values. Runs share this
+workspace's accepted documents; use a separate state directory for an independent
+topic. The deterministic fixture reads the actual native topic request; its
+revision writer reads the accepted draft and accepted critique. It is not inference
+or evaluation evidence. Explicit embedded model profiles remain available under
+the existing producer restrictions; external/authenticated Sessions flow mode is
+not enabled by this option.
+
+The panel shows ordered agents, required documents, human gates and the simulated
+action. Waiting roles are **unverified local attribution**, not work-account
+sign-in or a claim that a particular person can approve. Review every replacement
+in the proposal, including additional allowed documents. Accepting a document
+advances only its bound current gate. Request changes records feedback and consumes
+another attempt; failures and retries also consume the selected budget.
+
+The final action is prepared by the engine, not the manual “Request action
+approval” control. Recording approval still runs nothing: inspect and confirm the
+exact snapshot again before **Continue simulation**. A receipt is local only;
+nothing is sent or published. Refresh/reopen reads state and closing the panel does
+not cancel. After an engine restart, reopen the panel for a fresh capability;
+**Reconcile** inspects durable evidence and **Advance** is a separate explicit
+command. Unknown work is never automatically redispatched. Native cancellation
+may be unsupported: a persisted cancellation fence is not proof of remote
+cancellation or settled execution. Aggregate replay reports incomplete coverage
+honestly and only shows 0/0 when actual linked native proofs establish it.
+
+This is an operator-loaded definition, not chat-driven draft activation. The flow
+panel does not implement setup activation, scoped edits, version comparison, MCP
+or new agent-callable SDK actions. No visual redesign or actual Copilot app/WSL,
+hosted identity, real-action or cloud qualification is implied.
+
 ## Load the separate extension
 
 You control Copilot installation, sign-in, environment selection and extension trust.
