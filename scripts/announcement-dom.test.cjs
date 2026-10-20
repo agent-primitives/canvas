@@ -12,7 +12,7 @@ function inspected(id = 'op-one', newer = true) {
   const s = snapshot(id);
   return { id, session: 'native-session', status: 'pending-approval', concluded: false, snapshot: s, warning: newer ? 'A newer version exists; approving publishes this older version' : '', newer, currentRevision: (newer ? 'c' : 'a').repeat(40), confirmation: { confirmed: false, session: 'native-session', executionID: 'execution-one', toolCallID: 'call-one', requestSeq: 4, head: 5, revision: s.revision, digest: s.digest, currentRevision: (newer ? 'c' : 'a').repeat(40), newer } };
 }
-async function fixture(t, { unsupported = false, noActions = false } = {}) {
+async function fixture(t, { unsupported = false, noActions = false, manualClock = false } = {}) {
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 1000, height: 900 } });
@@ -41,8 +41,14 @@ async function fixture(t, { unsupported = false, noActions = false } = {}) {
     if (['index.html', 'app.js', 'style.css'].includes(file)) return route.fulfill({ body: fs.readFileSync(path.join(root, 'web', file)), contentType: file.endsWith('.js') ? 'text/javascript' : file.endsWith('.css') ? 'text/css' : 'text/html' });
     return route.fulfill({ status: 404, body: '{}' });
   });
+  if (manualClock) await page.clock.install({ time: new Date('2026-01-01T00:00:00Z') });
   await page.goto('http://canvas.test/');
   await page.waitForFunction(() => ui.state !== null);
+  if (manualClock) {
+    await page.clock.pauseAt(new Date('2026-01-01T01:00:00Z'));
+    // Advancing the clock can start an async poll; drain it before selection.
+    await page.evaluate(() => ui.refresh?.promise);
+  }
   f.select = async (id = 'op-one') => { await page.selectOption('#announcement-operation', id); await page.waitForFunction(id => ui.publication?.view?.id === id && !ui.publication.loading, id); };
   f.refresh = async () => { await page.evaluate(async () => { await refreshState(); await inspectAnnouncement(); }); await page.waitForFunction(() => !ui.publication.loading); };
   return f;
@@ -74,7 +80,9 @@ test('native persona select retains undeclared active attribution and follows po
 
 for (const mode of ['host-unreadable', 'inactive-gate', 'recoverable']) {
   test(`local Abandon of ${mode} requires full fresh confirmation and never dispatches`, async t => {
-    const f = await fixture(t); const { page } = f;
+    // Keep a periodic inspection from starting between confirmation and click.
+    // The real-clock background-inspection guard cases below remain unchanged.
+    const f = await fixture(t, { manualClock: true }); const { page } = f;
     page.setDefaultTimeout(3000);
     const v = f.views['op-one'];
     v.status = mode === 'recoverable' ? 'recoverable' : 'unavailable';
@@ -87,7 +95,9 @@ for (const mode of ['host-unreadable', 'inactive-gate', 'recoverable']) {
     assert.equal(await page.locator('#announcement-continue').isVisible(), false);
     if (mode !== 'recoverable') assert.equal(await page.locator('#announcement-recover').isVisible(), false);
     assert.deepEqual(f.posts, []);
+    const dispatched = page.waitForRequest(r => r.method() === 'POST' && new URL(r.url()).pathname === '/api/announcement/abandon');
     await page.check('#announcement-confirm'); await page.click('#announcement-abandon');
+    await dispatched;
     await page.waitForFunction(() => !ui.publication.busy);
     assert.equal(f.posts.length, 1); assert.equal(f.posts[0][0], '/api/announcement/abandon');
     assert.deepEqual(f.posts[0][1].confirmation, { ...v.confirmation, confirmed: true });
