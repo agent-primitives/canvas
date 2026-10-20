@@ -17,6 +17,8 @@ existing skip conditions change. Tests are discovered from the compiled package,
 so new tests are included automatically and subtests stay with their parent.
 Canvas tests run uncached (`-count=1`). The command prints a retained temporary
 log directory with per-shard JSON output, scalar timings and the 20 slowest tests.
+Interrupting the command with SIGINT or SIGTERM stops every shard process group,
+including test descendants, before the runner exits.
 For an unsharded diagnostic run, use `go test -race -json -count=1 ./internal/canvas`.
 
 The Python helpers and tests use only the Python 3.10+ standard library.
