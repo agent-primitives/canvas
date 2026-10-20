@@ -2,8 +2,8 @@ github.com/agent-primitives/sessions v0.2.1-0.20261019224537-f18a2cb1454d h1:5R4
 github.com/agent-primitives/sessions v0.2.1-0.20261019224537-f18a2cb1454d/go.mod h1:DZCwTLhJb6bltufqRqKK7IOEsx+s6isnMK7PMiaR7Ts=
 github.com/agent-primitives/sessions/integrations/substrate v0.0.0-20261019224537-f18a2cb1454d h1:jf7ic/0UjUu8Q+G9poQqeUUdLze/pW6ptT7zfQIxmd8=
 github.com/agent-primitives/sessions/integrations/substrate v0.0.0-20261019224537-f18a2cb1454d/go.mod h1:4RZd3LCiXwGVYAvPDvRS3F/zjgh5SbHWHIeHkrMPqkc=
-github.com/agent-primitives/suite v0.5.0 h1:rQ91lJMY5f1KC64ItQDIda7L0KTiJ7BRKXUMc0wysMM=
-github.com/agent-primitives/suite v0.5.0/go.mod h1:2l3r2UvhAciPbbMQshClXJbihFhs9BXW6srj1HPL9gQ=
+github.com/agent-primitives/suite v0.6.0 h1:bRGzbZTq+6ApAPiMS3pmbJCLG0RLA+dqGOhWMinQq9M=
+github.com/agent-primitives/suite v0.6.0/go.mod h1:61Z9uzfg7z/DdWSzHxY3kcDq1SAKcEXEOX6qNmD6MC0=
 github.com/agent-substrate/substrate v0.4.1-0.20261013053953-96dffb287919 h1:RP19jHZ/bv7AcknDgut2SW9btWbYnpOeT41M5bjOVAY=
 github.com/agent-substrate/substrate v0.4.1-0.20261013053953-96dffb287919/go.mod h1:XVQwhYEmOlb+ILs9BvSCHXYhgo2F6/N2qN4DmRwogQI=
 github.com/coreos/go-oidc/v3 v3.17.0 h1:hWBGaQfbi0iVviX4ibC7bk8OKT5qNr4klBaCHVNvehc=
