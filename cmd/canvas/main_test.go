@@ -28,6 +28,21 @@ func fixtureRoot(t *testing.T) string {
 	return root
 }
 
+func TestCanvasRefusesNonLoopbackBeforeCreatingState(t *testing.T) {
+	for _, address := range []string{"0.0.0.0:0", "192.0.2.10:0", "169.254.169.254:0", "localhost:0", "[::]:0", "[::1]:0", "127.0.0.2:0"} {
+		t.Run(address, func(t *testing.T) {
+			state := filepath.Join(t.TempDir(), "unused")
+			err := serve(context.Background(), []string{"-listen", address, "-state", state}, io.Discard)
+			if err == nil || !strings.Contains(err.Error(), "HTTP listener must bind 127.0.0.1") {
+				t.Fatalf("listener not refused at the loopback boundary: %v", err)
+			}
+			if _, err := os.Lstat(state); !os.IsNotExist(err) {
+				t.Fatal("refused listener created state")
+			}
+		})
+	}
+}
+
 func TestCanvasRejectsSymlinkStateWithoutChangingForeignTarget(t *testing.T) {
 	root := fixtureRoot(t)
 	for _, hostOnly := range []bool{false, true} {
