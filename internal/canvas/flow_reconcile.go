@@ -11,6 +11,7 @@ import (
 // flowReviewIntent records observation intent, never authority to repeat a decision.
 // One decision per counted attempt bounds this history by the run's attempt budget.
 type flowReviewIntent struct {
+	Generation     uint64                  `json:"generation,omitempty"`
 	Definition     string                  `json:"definition"`
 	Flow           string                  `json:"flow"`
 	Step           string                  `json:"step"`
@@ -68,6 +69,9 @@ func (c *Canvas) markReviewAppliedLocked(id string, p sharedspace.Proposal) {
 func (c *Canvas) InspectFlowReview(ctx context.Context, run string) (FlowReviewEvidence, error) {
 	c.publicationMu.Lock()
 	defer c.publicationMu.Unlock()
+	return c.inspectFlowReviewLocked(ctx, run, -1)
+}
+func (c *Canvas) inspectFlowReviewLocked(ctx context.Context, run string, index int) (FlowReviewEvidence, error) {
 	if err := ctx.Err(); err != nil {
 		return FlowReviewEvidence{}, err
 	}
@@ -83,7 +87,14 @@ func (c *Canvas) InspectFlowReview(ctx context.Context, run string) (FlowReviewE
 		c.mu.Unlock()
 		return v, nil
 	}
-	intent := r.Reviews[len(r.Reviews)-1]
+	if index < 0 {
+		index = len(r.Reviews) - 1
+	}
+	if index >= len(r.Reviews) {
+		c.mu.Unlock()
+		return v, ErrFlowConflict
+	}
+	intent := r.Reviews[index]
 	saved := c.findLocked(intent.Attempt)
 	var a attempt
 	if saved != nil {
@@ -107,7 +118,7 @@ func (c *Canvas) InspectFlowReview(ctx context.Context, run string) (FlowReviewE
 	if err = ctx.Err(); err != nil {
 		return v, err
 	}
-	if saved == nil || f.Definition != c.definition.Digest || intent.Definition != f.Definition || intent.Flow != f.Flow || a.FlowRun != f.ID || a.FlowStep != intent.Step || a.Base != intent.Base || a.Proposal != intent.Proposal || a.Session == "" || a.BundleDigest == "" || a.ExecutionOwner != f.ExecutionOwner {
+	if saved == nil || intent.Generation == 0 || intent.Generation != a.FlowGeneration || f.Definition != c.definition.Digest || intent.Definition != f.Definition || intent.Flow != f.Flow || a.FlowRun != f.ID || a.FlowStep != intent.Step || a.Base != intent.Base || a.Proposal != intent.Proposal || a.Session == "" || a.BundleDigest == "" || a.ExecutionOwner != f.ExecutionOwner {
 		return v, nil
 	}
 	var p *sharedspace.Proposal

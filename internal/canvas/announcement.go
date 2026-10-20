@@ -61,13 +61,17 @@ type announcementDecision struct {
 	Reason   string
 }
 type announcementOperation struct {
-	FlowRun     string                  `json:"flowRun,omitempty"`
-	TriggeredBy sharedspace.ReviewActor `json:"triggeredBy,omitzero"`
-	Snapshot    announcement.Snapshot   `json:"snapshot"`
-	Session     string                  `json:"session,omitempty"`
-	InitialHead int64                   `json:"initialHead"`
-	Stage       string                  `json:"stage"`
-	Decision    *announcementDecision   `json:"decision,omitempty"`
+	FlowGeneration uint64                  `json:"flowGeneration,omitempty"`
+	Revoked        bool                    `json:"revoked,omitempty"`
+	EffectReserved bool                    `json:"effectReserved,omitempty"`
+	EffectSettled  bool                    `json:"effectSettled,omitempty"`
+	FlowRun        string                  `json:"flowRun,omitempty"`
+	TriggeredBy    sharedspace.ReviewActor `json:"triggeredBy,omitzero"`
+	Snapshot       announcement.Snapshot   `json:"snapshot"`
+	Session        string                  `json:"session,omitempty"`
+	InitialHead    int64                   `json:"initialHead"`
+	Stage          string                  `json:"stage"`
+	Decision       *announcementDecision   `json:"decision,omitempty"`
 	// The engine owns the session; the requester is attribution only.
 	ExecutionOwner api.IdentityRef         `json:"executionOwner,omitzero"`
 	RequestedBy    sharedspace.ReviewActor `json:"requestedBy,omitzero"`
@@ -132,7 +136,7 @@ func (c *Canvas) RequestAnnouncement(ctx context.Context, action, proposal, role
 	}
 	return c.requestAnnouncementLocked(ctx, action, proposal, role, "")
 }
-func (c *Canvas) requestAnnouncementLocked(ctx context.Context, action, proposal, role, flowID string) (string, error) {
+func (c *Canvas) requestAnnouncementLocked(ctx context.Context, action, proposal, role, flowID string, advanceKeys ...string) (string, error) {
 	_, requestedBy, authErr := c.requester(ctx, role)
 	if authErr != nil {
 		return "", authErr
@@ -202,8 +206,10 @@ func (c *Canvas) requestAnnouncementLocked(ctx context.Context, action, proposal
 			c.mu.Unlock()
 			return "", ErrFlowConflict
 		}
+		c.finishAdvanceReservationLocked(f, advanceKeys)
 		f.Action = snapshot.Operation
 		f.State = "action"
+		op.FlowGeneration = c.flowRecordLocked(flowID).Generation
 		op.RequestedBy = f.RequestedBy
 		op.TriggeredBy = requestedBy
 	}
@@ -609,6 +615,9 @@ func (c *Canvas) resumeAnnouncement(ctx context.Context, id, role string, confir
 		return errAnnouncement
 	}
 	op.Stage = "pending"
+	if op.FlowRun != "" && !cleanup {
+		op.EffectReserved = true
+	}
 	if err := c.saveAnnouncement(op); err != nil {
 		return err
 	}
@@ -625,7 +634,12 @@ func (c *Canvas) resumeAnnouncement(ctx context.Context, id, role string, confir
 		}
 	}
 	op.Stage = "idle"
-	if err != nil && sessionsAuthError(err) == nil {
+	// Native authentication/authorization interceptors reject before mutation.
+	// This call alone reserved the effect, so a proven auth refusal can undo it.
+	if err != nil && sessionsAuthError(err) != nil && op.FlowRun != "" {
+		op.EffectReserved = false
+	}
+	if err != nil && (sessionsAuthError(err) == nil || op.FlowRun != "" && op.EffectReserved) {
 		op.Stage = "uncertain"
 	}
 	if save := c.saveAnnouncement(op); save != nil {

@@ -77,14 +77,15 @@ type Run struct {
 }
 type attempt struct {
 	Run
-	Input        string            `json:"input"`
-	Request      string            `json:"request"`
-	Report       *InjuryDTO        `json:"report,omitempty"`
-	Sources      map[string]string `json:"sources"`
-	BundleDigest string            `json:"bundleDigest,omitempty"`
-	Harness      string            `json:"harness,omitempty"`
-	ExpectedSeq  *int64            `json:"expectedSeq,omitempty"`
-	FlowStage    string            `json:"flowStage,omitempty"`
+	Input          string            `json:"input"`
+	Request        string            `json:"request"`
+	Report         *InjuryDTO        `json:"report,omitempty"`
+	Sources        map[string]string `json:"sources"`
+	BundleDigest   string            `json:"bundleDigest,omitempty"`
+	Harness        string            `json:"harness,omitempty"`
+	ExpectedSeq    *int64            `json:"expectedSeq,omitempty"`
+	FlowStage      string            `json:"flowStage,omitempty"`
+	FlowGeneration uint64            `json:"flowGeneration,omitempty"`
 }
 type ledger struct {
 	Flows []flowRunRecord `json:"flows,omitempty"`
@@ -564,7 +565,12 @@ func (c *Canvas) execute(id string) {
 			return
 		}
 		if a.FlowRun != "" {
-			if err := c.update(id, func(saved *attempt) { saved.FlowStage = "create-intent" }); err != nil {
+			allowed := false
+			if err := c.update(id, func(saved *attempt) { allowed = c.claimFlowDispatchStageLocked(saved, "create-intent") }); err != nil {
+				return
+			}
+			if !allowed {
+				finish(ErrFlowCancelPending)
 				return
 			}
 		}
@@ -598,6 +604,7 @@ func (c *Canvas) execute(id string) {
 	}
 	// Checkpoint the actual session identity before any model call or proposal
 	// publication; a nominal bundle alone is not execution evidence.
+	dispatchAllowed := true
 	if err := c.update(id, func(a *attempt) {
 		a.BundleDigest = digest
 		a.AuthoredBundleDigest = session.GetAnnotations()["authored-bundle-digest"]
@@ -605,10 +612,14 @@ func (c *Canvas) execute(id string) {
 		seq := session.GetLastSeq()
 		a.ExpectedSeq = &seq
 		if a.FlowRun != "" {
-			a.FlowStage = "exec-intent"
+			dispatchAllowed = c.claimFlowDispatchStageLocked(a, "exec-intent")
 		}
 	}); err != nil {
 		finish(err)
+		return
+	}
+	if !dispatchAllowed {
+		finish(ErrFlowCancelPending)
 		return
 	}
 	seq := session.GetLastSeq()
