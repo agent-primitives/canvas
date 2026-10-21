@@ -404,6 +404,52 @@ func TestExecutorStalledFrameDeadline(t *testing.T) {
 	}
 }
 
+// Catches a canceled parent's first cause hiding a later worker's durable uncertainty.
+func TestExecutorWorkerUncertaintySurvivesParentCancellation(t *testing.T) {
+	for _, outcome := range []error{announcementexec.ErrUncertain, errors.Join(errors.New("worker"), announcementexec.ErrUncertain), context.Canceled, announcementexec.ErrUnavailable} {
+		t.Run(outcome.Error(), func(t *testing.T) {
+			parent, stop := context.WithCancel(t.Context())
+			defer stop()
+			runCtx, cancel := context.WithCancelCause(parent)
+			defer cancel(nil)
+			workers := announcementWorkers{cancel: cancel}
+			started, release := make(chan struct{}), make(chan struct{})
+			workers.Go(func() error { close(started); <-release; return outcome })
+			<-started
+			stop()
+			<-runCtx.Done()
+			if !errors.Is(context.Cause(runCtx), context.Canceled) {
+				t.Fatal("parent cancellation did not win first")
+			}
+			// The real worker group, not the context's immutable first cause,
+			// owns final error publication after every admitted worker drains.
+			result := make(chan error, 1)
+			go func() { var err error; workers.finish(&err); result <- err }()
+			select {
+			case <-result:
+				t.Fatal("shutdown returned before the worker drained")
+			default:
+			}
+			close(release)
+			select {
+			case err := <-result:
+				if errors.Is(outcome, announcementexec.ErrUncertain) {
+					if !errors.Is(err, announcementexec.ErrUncertain) {
+						t.Fatalf("uncertainty lost after parent cancellation: %v", err)
+					}
+				} else if err != nil {
+					t.Fatalf("ordinary shutdown changed: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("shutdown did not drain")
+			}
+			if !errors.Is(context.Cause(runCtx), context.Canceled) {
+				t.Fatal("test no longer exercises immutable parent cause")
+			}
+		})
+	}
+}
+
 // Catches keeping a corrupted, fenced store online to consume further approvals.
 func TestExecutorUncertainStops(t *testing.T) {
 	socket, state := executorPaths(t)

@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -27,6 +28,30 @@ import (
 const executorFrameLimit = 1 << 20
 
 var errExecutorRequest = errors.New("invalid simulated announcement request")
+
+// A context preserves its first cancellation cause. Keep worker uncertainty
+// separately so a parent shutdown cannot mask a late commit/confirmation result.
+type announcementWorkers struct {
+	pending   sync.WaitGroup
+	uncertain atomic.Bool
+	cancel    context.CancelCauseFunc
+}
+
+func (w *announcementWorkers) Go(run func() error) {
+	w.pending.Go(func() {
+		if err := run(); errors.Is(err, announcementexec.ErrUncertain) {
+			w.uncertain.Store(true)
+			w.cancel(announcementexec.ErrUncertain)
+		}
+	})
+}
+
+func (w *announcementWorkers) finish(result *error) {
+	w.pending.Wait()
+	if w.uncertain.Load() {
+		*result = announcementexec.ErrUncertain
+	}
+}
 
 func runAnnouncementExecutor(ctx context.Context, args []string, out io.Writer) error {
 	flags := flag.NewFlagSet("canvas-harness executor", flag.ContinueOnError)
@@ -144,7 +169,7 @@ func executorSocketParent(socket, state string) (*os.Root, error) {
 
 // serveAnnouncementExecutor runs separately from producer serve. Shutdown waits
 // for all admitted work before releasing the store's single-writer lease.
-func serveAnnouncementExecutor(ctx context.Context, socket, state string) error {
+func serveAnnouncementExecutor(ctx context.Context, socket, state string) (result error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -175,8 +200,8 @@ func serveAnnouncementExecutor(ctx context.Context, socket, state string) error 
 	defer cancel(nil)
 	stopped := context.AfterFunc(runCtx, func() { listener.Close() })
 	defer stopped()
-	var workers sync.WaitGroup
-	defer workers.Wait()
+	workers := announcementWorkers{cancel: cancel}
+	defer workers.finish(&result)
 	slots := make(chan struct{}, 16)
 	for {
 		conn, e := listener.Accept()
@@ -191,7 +216,7 @@ func serveAnnouncementExecutor(ctx context.Context, socket, state string) error 
 		}
 		select {
 		case slots <- struct{}{}:
-			workers.Go(func() {
+			workers.Go(func() error {
 				defer func() { <-slots }()
 				defer conn.Close()
 				callCtx, stop := context.WithTimeout(runCtx, 5*time.Second)
@@ -199,9 +224,7 @@ func serveAnnouncementExecutor(ctx context.Context, socket, state string) error 
 				closeOnCancel := context.AfterFunc(callCtx, func() { conn.Close() })
 				defer closeOnCancel()
 				conn.SetDeadline(time.Now().Add(5 * time.Second))
-				if err := serveAnnouncementConn(callCtx, conn, store); errors.Is(err, announcementexec.ErrUncertain) {
-					cancel(announcementexec.ErrUncertain)
-				}
+				return serveAnnouncementConn(callCtx, conn, store)
 			})
 		default:
 			conn.Close()
