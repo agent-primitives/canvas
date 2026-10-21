@@ -47,6 +47,11 @@ human. Copilot drafts configuration; it does not activate or approve Canvas.
   [authoring reference](../../../docs/canvas-authoring.md), not fixture edits
   disguised as qualified execution. New agent/suite production belongs to kmx;
   do not invent digests or a `kmx canvas` command.
+- To bind supplied reviewed local assets, use `canvas bind FILE --out NEWDIR`
+  with an existing slot and exact `--agent`, `--ref`, `--layout`, `--member` and
+  `--platform`, as documented in the CLI contract. It creates an inert draft,
+  not an agent or activation. Keep scopes narrow; a changed binding clears stale
+  evaluation association. Validate the output and show its complete changes.
 
 ## Validate and hand off
 

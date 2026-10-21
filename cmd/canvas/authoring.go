@@ -59,7 +59,7 @@ func requestsJSON(operation string, args []string) bool {
 		}
 		name, value, hasValue := strings.Cut(args[i], "=")
 		option := strings.TrimPrefix(strings.TrimPrefix(name, "-"), "-")
-		if strings.HasPrefix(name, "-") && !hasValue && (option == "root" || operation == "init" && (option == "name" || option == "template")) {
+		if strings.HasPrefix(name, "-") && !hasValue && (option == "root" || operation == "init" && (option == "name" || option == "template") || operation == "bind" && (option == "out" || option == "agent" || option == "ref" || option == "layout" || option == "member" || option == "platform")) {
 			i++ // FlagSet consumes the next argument as this string option's value.
 			continue
 		}
@@ -95,6 +95,8 @@ func authoringCommand(args []string, output io.Writer) error {
 		message := "Definition valid (offline); not activated. Validation is not authorization or runtime qualification.\n"
 		if operation == "init" {
 			message = "Created deterministic fixture package; not started or runtime-qualified. Validate canvas.yaml before deliberate startup.\n"
+		} else if operation == "bind" {
+			message = "Created inert bound draft; not activated or runtime-qualified. Review all files before deliberate activation.\n"
 		}
 		_, err := io.WriteString(output, message)
 		return err
@@ -111,8 +113,17 @@ func authoringCommand(args []string, output io.Writer) error {
 	flags.SetOutput(io.Discard)
 	root := flags.String("root", ".", "init: source checkout; validate: base for relative FILE")
 	parsedJSON := flags.Bool("json", false, "emit one canvas.authoring/v1 JSON result")
-	var template, name string
+	var template, name, destination, agent string
+	var suite contract.SuiteRef
 	var fixture bool
+	if operation == "bind" {
+		flags.StringVar(&destination, "out", "", "new unused draft directory")
+		flags.StringVar(&agent, "agent", "", "existing declared agent slot")
+		flags.StringVar(&suite.Ref, "ref", "", "exact published suite reference")
+		flags.StringVar(&suite.Layout, "layout", "", "complete local OCI layout relative to the draft definition")
+		flags.StringVar(&suite.Member, "member", "", "canonical member name")
+		flags.StringVar(&suite.Platform, "platform", "", "exact published platform")
+	}
 	if operation == "init" {
 		flags.StringVar(&template, "template", "single-review", "single-review or writer-review")
 		flags.StringVar(&name, "name", "", "canvas name; defaults to destination basename (lowercase letters/digits/hyphens)")
@@ -120,7 +131,7 @@ func authoringCommand(args []string, output io.Writer) error {
 	}
 	var help strings.Builder
 	flags.Usage = func() {
-		fmt.Fprintf(&help, "Usage: canvas %s %s [flags]\n", operation, map[string]string{"init": "DIR --fixture", "validate": "FILE"}[operation])
+		fmt.Fprintf(&help, "Usage: canvas %s %s [flags]\n", operation, map[string]string{"init": "DIR --fixture", "validate": "FILE", "bind": "FILE --out DIR --agent ID --ref REF --layout REL --member MEMBER --platform PLATFORM"}[operation])
 		flags.SetOutput(&help)
 		flags.PrintDefaults()
 		flags.SetOutput(io.Discard)
@@ -163,6 +174,19 @@ func authoringCommand(args []string, output io.Writer) error {
 				return refuse("usage-error", "template-options", authoring.ErrOptions.Error(), 2)
 			}
 			return refuse("refused", "init-refused", err.Error(), 1)
+		}
+		result.OK, result.Status, result.Files = true, "created", files
+	} else if operation == "bind" {
+		if destination == "" || agent == "" || suite.Ref == "" || suite.Layout == "" || suite.Member == "" || suite.Platform == "" {
+			return refuse("usage-error", "binding-required", "bind requires --out, --agent and complete --ref/--layout/--member/--platform", 2)
+		}
+		filename := operand
+		if !filepath.IsAbs(filename) {
+			filename = filepath.Join(*root, filename)
+		}
+		files, err := authoring.BindDraft(filename, destination, agent, suite)
+		if err != nil {
+			return refuse("refused", "bind-refused", "cannot bind the supplied local suite to this draft; check identity, assets, slot and unused output", 1)
 		}
 		result.OK, result.Status, result.Files = true, "created", files
 	} else {

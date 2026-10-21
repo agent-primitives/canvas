@@ -65,7 +65,7 @@ func privateStateDir(path string) (string, error) {
 }
 
 func serve(ctx context.Context, args []string, output io.Writer) error {
-	if len(args) > 0 && (args[0] == "init" || args[0] == "validate") {
+	if len(args) > 0 && (args[0] == "init" || args[0] == "validate" || args[0] == "bind") {
 		return authoringCommand(args, output)
 	}
 	flags := flag.NewFlagSet("canvas", flag.ContinueOnError)
