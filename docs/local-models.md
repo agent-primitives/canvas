@@ -10,7 +10,7 @@ sign-in or authorization. All effects described here remain local simulations.
 ## What you need
 
 - Linux or macOS, Git, Make, and a browser
-- Go 1.27.0+; `go.mod` selects toolchain 1.27.2 (automatic download must be allowed)
+- Go 1.27.0+; `go.mod` selects toolchain 1.27.3 (automatic download must be allowed)
 - Python 3.10+ for the local model and dev helpers
 - A ready Docker or Podman engine for the Ollama route below; no cloud account
 - Node and Playwright 1.63.0 with Chromium only if you run the test suite, not

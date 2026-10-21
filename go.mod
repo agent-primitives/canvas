@@ -2,7 +2,7 @@ module github.com/agent-primitives/canvas
 
 go 1.27.0
 
-toolchain go1.27.2
+toolchain go1.27.3
 
 require (
 	github.com/agent-primitives/sessions v0.2.1-0.20261019224537-f18a2cb1454d
