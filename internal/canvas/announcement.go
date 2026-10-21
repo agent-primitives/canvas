@@ -591,14 +591,14 @@ func (c *Canvas) RecoverAnnouncement(ctx context.Context, id, role string, confi
 	return c.resumeAnnouncement(ctx, id, role, confirmation, true)
 }
 func (c *Canvas) resumeAnnouncement(ctx context.Context, id, role string, confirmation AnnouncementConfirmation, recover bool) error {
-	if err := c.editFence(); err != nil {
-		return err
-	}
 	if _, err := c.actionIdentity(ctx, role); err != nil {
 		return err
 	}
 	c.publicationMu.Lock()
 	defer c.publicationMu.Unlock()
+	if err := c.editFence(); err != nil {
+		return err
+	}
 	if !c.flowRole(role) || !confirmation.Confirmed {
 		return errAnnouncement
 	}
