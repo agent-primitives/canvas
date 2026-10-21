@@ -139,6 +139,8 @@ type Canvas struct {
 	reviewAuthorizer ReviewAuthorizer
 	definition       *CompiledDefinition
 	mu               sync.Mutex
+	// activeExecutions is runtime-only and mu-guarded, including final bookkeeping.
+	activeExecutions int
 	publicationMu    sync.Mutex
 	// inputHeads is scanMu-owned and deliberately empty after restart: validated
 	// source checkpoints must reconcile independently of durable intent dedupe.
@@ -474,6 +476,14 @@ func (c *Canvas) persistenceFailureLocked(a *attempt) {
 }
 func (c *Canvas) execute(id string) {
 	defer c.wg.Done()
+	c.mu.Lock()
+	c.activeExecutions++
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.activeExecutions--
+		c.mu.Unlock()
+	}()
 	select {
 	case c.sem <- struct{}{}:
 		defer func() { <-c.sem }()

@@ -290,6 +290,10 @@ func (m *Manager) Activate(req ActivationRequest) (Instance, error) {
 		if m.data.Pending != "" || req.ExpectedCurrent != m.data.Active {
 			return Instance{}, ErrConflict
 		}
+		// Existing keys above remain readable or resumable without a new slot.
+		if len(m.data.Instances) >= 4096 {
+			return Instance{}, ErrRefused
+		}
 		pkg, err := m.packages.Load(req.Candidate)
 		if err != nil {
 			return Instance{}, ErrRefused

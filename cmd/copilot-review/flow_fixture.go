@@ -56,6 +56,10 @@ func qualifiedNorthwindFixture(d *canvas.CompiledDefinition, frozen *authoring.P
 	if !same(writer.Read, []string{"brief", "feedback", "prd"}) && !same(writer.Read, []string{"brief", "feedback", "prd", "review"}) {
 		return false
 	}
+	// Flow revisions consume accepted critique; the manual fixture does not.
+	if len(d.Flows) > 0 && !slices.Contains(writer.Read, "review") {
+		return false
+	}
 	for _, flow := range d.Flows {
 		if flow.Inputs.Schema != "schemas/run.json" || files[path.Join(path.Dir(frozen.Definition), flow.Inputs.Schema)] != "9537c6049433a5cb4aa86164dd91d2829543f0ad210d4e722d41acde42a0cc33" {
 			return false

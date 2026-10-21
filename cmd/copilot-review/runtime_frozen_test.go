@@ -69,15 +69,25 @@ func frozenRuntimeFixture(t *testing.T, definition string, mutate ...func(string
 }
 
 func TestFrozenRuntimeRefusesUnqualifiedPRDFixture(t *testing.T) {
-	for _, change := range []string{"path", "schema", "scope"} {
+	for _, change := range []string{"path", "schema", "scope", "flow missing review read"} {
 		t.Run(change, func(t *testing.T) {
-			_, _, pkg, path := frozenRuntimeFixture(t, "canvas.yaml", func(source string) {
-				filename := filepath.Join(source, "canvas.yaml")
+			definition, options := "canvas.yaml", engineOptions{}
+			if change == "flow missing review read" {
+				definition, options.flowAgentRuns = "flow.yaml", 12
+			}
+			_, _, pkg, path := frozenRuntimeFixture(t, definition, func(source string) {
+				filename := filepath.Join(source, definition)
 				raw, err := os.ReadFile(filename)
 				if err != nil {
 					t.Fatal(err)
 				}
 				switch change {
+				case "flow missing review read":
+					changed := strings.Replace(string(raw), "read: [brief, feedback, prd, review]", "read: [brief, feedback, prd]", 1)
+					if changed == string(raw) {
+						t.Fatal("flow fixture writer review scope not found")
+					}
+					raw = []byte(changed)
 				case "path":
 					raw = []byte(strings.ReplaceAll(strings.ReplaceAll(string(raw), "path: prd.json", "path: other.json"), "    prd.json: seeds/prd.json", "    other.json: seeds/prd.json"))
 				case "scope":
@@ -97,9 +107,9 @@ func TestFrozenRuntimeRefusesUnqualifiedPRDFixture(t *testing.T) {
 				}
 			})
 			state := filepath.Join(t.TempDir(), "not-created")
-			prepared, err := prepareRuntime(t.TempDir(), state, path, engineOptions{}, &pkg)
+			prepared, err := prepareRuntime(t.TempDir(), state, path, options, &pkg)
 			if !errors.Is(err, authoring.ErrPackage) || prepared != nil {
-				t.Fatalf("unqualified Northwind-shaped fixture accepted: %v", err)
+				t.Fatalf("unqualified Northwind-shaped fixture accepted: prepared=%v err=%v", prepared != nil, err)
 			}
 			if _, err = os.Lstat(state); !os.IsNotExist(err) {
 				t.Fatal("fixture refusal created state", err)

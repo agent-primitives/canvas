@@ -3,9 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -187,6 +189,54 @@ func TestAuthoringRefusesBeforeState(t *testing.T) {
 		if _, err := os.Stat(state); !os.IsNotExist(err) {
 			t.Fatal("refusal wrote state")
 		}
+	}
+}
+
+func TestAuthoringPathInputsStayInsideRetainedPackages(t *testing.T) {
+	root, _ := filepath.Abs(filepath.Join("..", ".."))
+	draft, state := t.TempDir(), filepath.Join(t.TempDir(), "state")
+	if _, err := authoring.Init(root, filepath.Join(draft, "nested"), "single-review", "nested"); err != nil {
+		t.Fatal(err)
+	}
+	d, err := startAuthoring(root, state, "127.0.0.1:0", draft, engineOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	jar, _ := cookiejar.New(nil)
+	client := &http.Client{Jar: jar}
+	authoringRequest(t, client, d.URL, "GET", "/api/demo", "", nil)
+	_, before := authoringRequest(t, client, d.URL, "GET", "/api/authoring", "", nil)
+	for _, definition := range []string{"../nested/canvas.yaml", filepath.Join(draft, "nested/canvas.yaml"), "nested/../nested/canvas.yaml", `nested\canvas.yaml`} {
+		code, body := authoringRequest(t, client, d.URL, "POST", "/api/authoring/prepare", "", map[string]string{"definition": definition})
+		if code != 400 || !bytes.Contains(body, []byte(`"code":"ACTIVATION_REFUSED"`)) || bytes.Contains(body, []byte(draft)) {
+			t.Fatalf("unsafe definition admitted/leaked: %q %d %s", definition, code, body)
+		}
+	}
+	for i, id := range []string{"../packages", "/tmp/package", strings.Repeat("A", 64), strings.Repeat("0", 64)} {
+		for _, path := range []string{"/api/authoring/candidate?id=" + url.QueryEscape(id), "/api/authoring/file?candidate=" + url.QueryEscape(id) + "&path=canvas.yaml"} {
+			if code, body := authoringRequest(t, client, d.URL, "GET", path, "", nil); code != 400 || !bytes.Contains(body, []byte(`"code":"ACTIVATION_REFUSED"`)) {
+				t.Fatalf("unsafe candidate admitted: %q %d", path, code)
+			}
+		}
+		code, body := authoringRequest(t, client, d.URL, "POST", "/api/authoring/activate", "", activation.ActivationRequest{Candidate: id, RequestKey: fmt.Sprintf("invalid-candidate-%d", i), Confirmed: true, Actor: "local-reviewer"})
+		if code != 400 || !bytes.Contains(body, []byte(`"code":"ACTIVATION_REFUSED"`)) {
+			t.Fatalf("unsafe activation candidate admitted: %q %d", id, code)
+		}
+	}
+	_, after := authoringRequest(t, client, d.URL, "GET", "/api/authoring", "", nil)
+	if !bytes.Equal(before, after) {
+		t.Fatal("invalid paths changed catalog")
+	}
+	entries, err := os.ReadDir(filepath.Join(state, "authoring", "packages"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("invalid paths published a package: %v %v", entries, err)
+	}
+	if _, err := os.Stat(filepath.Join(state, "instances")); !os.IsNotExist(err) {
+		t.Fatalf("invalid paths started runtime state: %v", err)
+	}
+	if code, raw := authoringRequest(t, client, d.URL, "POST", "/api/authoring/prepare", "", map[string]string{"definition": "nested/canvas.yaml"}); code != 200 {
+		t.Fatalf("valid nested package refused: %d %s", code, raw)
 	}
 }
 

@@ -1,8 +1,10 @@
 package activation
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -59,6 +61,178 @@ func packageFixture(t *testing.T) (*authoring.Packages, authoring.Package, strin
 }
 func request(id, current, key string) ActivationRequest {
 	return ActivationRequest{Candidate: id, ExpectedCurrent: current, RequestKey: key, Confirmed: true, Actor: "local person (unverified)"}
+}
+
+// Fill with valid preflight refusals: these reservations never owned runtime state.
+// Keeping the fixture compact avoids thousands of factory calls and fsyncs.
+func fillCatalogToLimit(t *testing.T, m *Manager, candidate authoring.Package) {
+	t.Helper()
+	for n := 1; len(m.data.Instances) < 4096; n++ {
+		id := fmt.Sprintf("%020x", n)
+		if m.instance(id) != nil {
+			continue
+		}
+		req := request(candidate.ID, "", fmt.Sprintf("capacity-refused-%04d", n))
+		m.data.Instances = append(m.data.Instances, Instance{ID: id, Package: candidate.ID, DefinitionDigest: candidate.DefinitionDigest, RuntimeMode: candidate.RuntimeMode, Status: "refused"})
+		m.data.Requests[req.RequestKey] = &activationRecord{Request: req, Instance: id, Phase: "refused"}
+	}
+	if err := m.validate(); err != nil {
+		t.Fatal("invalid capacity fixture", err)
+	}
+	if err := m.save(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestActivationCatalogLimitRejectsNewReservationWithoutEffects(t *testing.T) {
+	p, candidate, root := packageFixture(t)
+	preflights, starts := 0, 0
+	var live *testRuntime
+	f := Factory{Preflight: func(Instance, authoring.Package, string) (any, error) {
+		preflights++
+		return nil, nil
+	}, Start: func(Instance, any) (Runtime, error) {
+		starts++
+		live = &testRuntime{}
+		return live, nil
+	}}
+	m, err := Open(root, p, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstReq := request(candidate.ID, "", "capacity-active-key")
+	first, err := m.Activate(firstReq)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fillCatalogToLimit(t, m, candidate)
+	m.Close()
+	m, err = Open(root, p, f)
+	if err != nil {
+		t.Fatal("valid full catalog must open", err)
+	}
+	defer m.Close()
+	state := filepath.Join(m.StatePath(first.ID), "keep")
+	if err := os.MkdirAll(filepath.Dir(state), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(state, []byte("existing state"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, "catalog.json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memory, _ := json.Marshal(m.data)
+	calls, boots := preflights, starts
+	// Completed and refused keys remain readable even when no slot is free.
+	duplicate, err := m.Activate(firstReq)
+	if err != nil || duplicate != first {
+		t.Fatalf("completed readback: %+v %v", duplicate, err)
+	}
+	refused := m.data.Requests["capacity-refused-0001"].Request
+	if _, err := m.Activate(refused); !errors.Is(err, ErrRefused) {
+		t.Fatalf("refused readback: %v", err)
+	}
+	newReq := request(candidate.ID, first.ID, "capacity-new-key-01")
+	for range 2 {
+		got, err := m.Activate(newReq)
+		if !errors.Is(err, ErrRefused) || got != (Instance{}) {
+			t.Fatalf("full catalog must refuse before reservation: got %+v, %v", got, err)
+		}
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterMemory, _ := json.Marshal(m.data)
+	if !bytes.Equal(before, after) || !os.SameFile(info, afterInfo) || !bytes.Equal(memory, afterMemory) {
+		t.Fatal("capacity refusal changed catalog bytes, file identity, or ledger")
+	}
+	if preflights != calls || starts != boots || live.seals != 0 || live.closes != 0 {
+		t.Fatal("capacity refusal invoked factory or retired the active runtime")
+	}
+	stateBytes, err := os.ReadFile(state)
+	if err != nil || string(stateBytes) != "existing state" {
+		t.Fatal("capacity refusal lost existing state", err)
+	}
+	dirs, err := os.ReadDir(filepath.Join(root, "instances"))
+	if err != nil || len(dirs) != 1 || dirs[0].Name() != first.ID {
+		t.Fatal("capacity refusal created or dropped an instance directory", err)
+	}
+	m.Close()
+	m, err = Open(root, p, f)
+	if err != nil {
+		t.Fatal("capacity refusal made restart invalid", err)
+	}
+	defer m.Close()
+	if view := m.Snapshot(); len(view.Instances) != 4096 || view.Active != first.ID || view.Pending != nil {
+		t.Fatal("capacity refusal changed durable identities")
+	}
+}
+
+func TestActivationCatalogLimitContinuesExactPendingReservation(t *testing.T) {
+	p, candidate, root := packageFixture(t)
+	preflights, starts := 0, 0
+	fail := true
+	f := Factory{Preflight: func(Instance, authoring.Package, string) (any, error) {
+		preflights++
+		return nil, nil
+	}, Start: func(Instance, any) (Runtime, error) {
+		starts++
+		if fail {
+			return nil, errors.New("startup interrupted")
+		}
+		return &testRuntime{}, nil
+	}}
+	m, err := Open(root, p, f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := request(candidate.ID, "", "capacity-pending-key")
+	reserved, err := m.Activate(req)
+	if !errors.Is(err, ErrUncertain) {
+		t.Fatal(err)
+	}
+	fillCatalogToLimit(t, m, candidate)
+	m.Close()
+	m, err = Open(root, p, f)
+	if err != nil {
+		t.Fatal("valid full pending catalog must open", err)
+	}
+	defer m.Close()
+	if preflights != 1 || starts != 1 {
+		t.Fatal("open replayed pending activation")
+	}
+	if pending := m.Snapshot().Pending; pending == nil || pending.Request != req || pending.Instance.ID != reserved.ID {
+		t.Fatal("open lost exact pending request")
+	}
+	fail = false
+	got, err := m.Activate(req)
+	if err != nil || got.ID != reserved.ID || len(m.data.Instances) != 4096 || m.data.Pending != "" || m.data.Active != reserved.ID || preflights != 2 || starts != 2 {
+		t.Fatalf("exact continuation did not reuse reservation: %+v %v", got, err)
+	}
+	path := filepath.Join(root, "catalog.json")
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate, err := m.Activate(req); err != nil || duplicate != got || preflights != 2 || starts != 2 {
+		t.Fatal("completed continuation replayed", err)
+	}
+	afterInfo, err := os.Stat(path)
+	if err != nil || !os.SameFile(info, afterInfo) {
+		t.Fatal("completed readback rewrote catalog", err)
+	}
 }
 
 func TestActivationFreshLinkedHistory(t *testing.T) {

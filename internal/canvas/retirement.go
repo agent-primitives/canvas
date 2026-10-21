@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
 	"unicode/utf8"
+
+	"github.com/agent-primitives/canvas/internal/announcement"
+	"github.com/agent-primitives/canvas/internal/sharedspace"
 )
 
 // ErrRetired deliberately exposes neither the state path nor seal contents.
@@ -28,11 +32,27 @@ type ArchivedDocument struct {
 	Digest  string `json:"digest"`
 }
 
+// ArchivedAnnouncement deliberately excludes actionable confirmations and the
+// private operation journal. All nested snapshots contain only value fields.
+type ArchivedAnnouncement struct {
+	ID              string                  `json:"id"`
+	Session         string                  `json:"session"`
+	Status          string                  `json:"status"`
+	Concluded       bool                    `json:"concluded"`
+	Snapshot        announcement.Snapshot   `json:"snapshot"`
+	Receipt         *announcement.Receipt   `json:"receipt,omitempty"`
+	Reviewer        sharedspace.ReviewActor `json:"reviewer"`
+	IdentitySource  string                  `json:"identitySource"`
+	CurrentRevision string                  `json:"currentRevision"`
+	Newer           bool                    `json:"newer"`
+}
+
 type Archive struct {
-	State     json.RawMessage             `json:"state"`
-	Flows     json.RawMessage             `json:"flows"`
-	Revision  string                      `json:"revision"`
-	Documents map[string]ArchivedDocument `json:"documents"`
+	Announcements []ArchivedAnnouncement      `json:"announcements,omitempty"`
+	State         json.RawMessage             `json:"state"`
+	Flows         json.RawMessage             `json:"flows"`
+	Revision      string                      `json:"revision"`
+	Documents     map[string]ArchivedDocument `json:"documents"`
 }
 
 var retirementID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
@@ -63,7 +83,12 @@ func (c *Canvas) SealForHistory(nextID string, persist func(Archive) error) erro
 	}
 	c.mu.Lock()
 	binding, bindErr := c.retirementBindingLocked()
-	busy := c.flowAdmissionBusyLocked()
+	busy := c.flowAdmissionBusyLocked() || c.activeExecutions != 0
+	attempts := append([]attempt(nil), c.data.Attempts...)
+	flowIDs := make(map[string]string, len(c.data.Flows))
+	for _, f := range c.data.Flows {
+		flowIDs[f.ID] = f.Flow
+	}
 	ops := append([]announcementOperation(nil), c.data.Announcements...)
 	c.mu.Unlock()
 	if busy || bindErr != nil {
@@ -93,6 +118,45 @@ func (c *Canvas) SealForHistory(nextID string, persist func(Archive) error) erro
 				return errRetirementBusy
 			}
 		}
+		// Publication recovered after a crash is not proof of clean execution.
+		// Read the exact native execution outside mu, then bind it again below.
+		for _, a := range attempts {
+			if !a.Completed.IsZero() {
+				continue
+			}
+			if a.Proposal == "" {
+				return errRetirementBusy
+			}
+			native, err := c.readFlowExecution(c.ctx, a)
+			if err != nil || !native.Settled || !native.Complete {
+				return errRetirementBusy
+			}
+			var changes map[string]string
+			if a.FlowRun != "" {
+				changes, err = c.definition.ChangesForStep(flowIDs[a.FlowRun], a.FlowStep, native.Output)
+			} else {
+				changes, err = c.definition.Changes(a.Agent, native.Output)
+			}
+			if err != nil {
+				return errRetirementBusy
+			}
+			matched := false
+			for _, p := range state.Proposals {
+				at := p.Attribution
+				if p.ID == a.Proposal && p.Base == a.Base && maps.Equal(p.Changes, changes) &&
+					at.Run == a.ID && at.Session == a.Session && at.Agent == a.Agent &&
+					at.BundleDigest == a.BundleDigest && at.AuthoredBundleDigest == a.AuthoredBundleDigest &&
+					at.ExecutionOwner == a.ExecutionOwner && at.RequestedBy == a.RequestedBy &&
+					at.TriggeredBy == a.TriggeredBy && at.TriggeringReview == a.TriggeringReview &&
+					at.FlowRun == a.FlowRun && at.FlowStep == a.FlowStep && maps.Equal(at.Sources, a.Sources) {
+					matched = true
+				}
+			}
+			if !matched {
+				return errRetirementBusy
+			}
+		}
+		var announcements []ArchivedAnnouncement
 		for _, op := range ops {
 			if op.Stage == "pending" || op.Stage == "uncertain" || op.EffectReserved && !op.EffectSettled {
 				return errRetirementBusy
@@ -101,17 +165,22 @@ func (c *Canvas) SealForHistory(nextID string, persist func(Archive) error) erro
 			if err != nil || !view.Concluded {
 				return errRetirementBusy
 			}
+			archived := ArchivedAnnouncement{
+				ID: view.ID, Session: view.Session, Status: view.Status, Concluded: view.Concluded,
+				Snapshot: view.Snapshot, Reviewer: view.Reviewer, IdentitySource: view.IdentitySource,
+				CurrentRevision: view.CurrentRevision, Newer: view.Newer,
+			}
+			if view.Receipt != nil {
+				receipt := *view.Receipt
+				archived.Receipt = &receipt
+			}
+			announcements = append(announcements, archived)
 		}
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		now, err := c.retirementBindingLocked()
-		if err != nil || now != binding || c.flowAdmissionBusyLocked() {
+		if err != nil || now != binding || c.flowAdmissionBusyLocked() || c.activeExecutions != 0 {
 			return errRetirementBusy
-		}
-		for _, a := range c.data.Attempts {
-			if a.Completed.IsZero() {
-				return errRetirementBusy
-			}
 		}
 		if c.flowOptions != nil {
 			var panel flowPanelState
@@ -123,7 +192,7 @@ func (c *Canvas) SealForHistory(nextID string, persist func(Archive) error) erro
 		if err != nil {
 			return errRetirementCapture
 		}
-		archive := Archive{State: public, Flows: flows, Revision: state.Head, Documents: map[string]ArchivedDocument{}}
+		archive := Archive{Announcements: announcements, State: public, Flows: flows, Revision: state.Head, Documents: map[string]ArchivedDocument{}}
 		paths, err := c.space.Paths(state.Head)
 		if err != nil {
 			return errRetirementCapture
@@ -147,7 +216,7 @@ func (c *Canvas) SealForHistory(nextID string, persist func(Archive) error) erro
 		if err := persist(archive); err != nil {
 			return err
 		}
-		if head, err := c.space.Head(); err != nil || head != state.Head || c.flowAdmissionBusyLocked() {
+		if head, err := c.space.Head(); err != nil || head != state.Head || c.flowAdmissionBusyLocked() || c.activeExecutions != 0 {
 			return errRetirementCapture
 		}
 		if err := c.writeRetirementSeal(nextID, state.Head); err != nil {
