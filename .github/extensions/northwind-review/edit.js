@@ -25,7 +25,7 @@ export function createEditPanel({ api, action, selectionChanged, currentFlow = (
   const binding = () => JSON.stringify([metadata?.boot, metadata?.activeInstance || '']);
   const role = () => current()?.request.role || requesterRole;
   const blocked = () => !!snapshot?.slot || !!pending || sending;
-  const isGate = proposal => current()?.state === 'proposal' && current()?.proposal === proposal && snapshot?.slot === current()?.id;
+  const isGate = proposal => !pending && !sending && current()?.state === 'proposal' && current()?.proposal === proposal && snapshot?.slot === current()?.id;
   function clear() { $('edit-confirm').checked = false; $('edit-command-confirm').checked = false; }
   function changed() { clear(); selectionChanged(); }
   function persist() { try { if (pending) sessionStorage.setItem(storageKey, JSON.stringify(pending)); else sessionStorage.removeItem(storageKey); } catch { /* Memory still retains the exact request for this view. */ } }

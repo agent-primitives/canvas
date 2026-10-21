@@ -53,6 +53,12 @@ async function flowPanel(t, transform, authoring = false, beforeNavigate) {
     const response = await fetch(bridge.origin + route, { headers }); assert.equal(response.status, 200); return response.json();
   }
   return { page, frame, ready, api, requests, posts, errors, draftRoot: path.dirname(definition), get bridge() { return bridge; },
+    nativeHistory() {
+      // Read the real journal (including WAL), never manufacture native evidence.
+      return JSON.parse(execFileSync('python3', ['-c', `import json, sqlite3, sys
+with sqlite3.connect('file:' + sys.argv[1] + '?mode=ro', uri=True) as db:
+    print(json.dumps({'sessions': db.execute('SELECT session FROM sessions ORDER BY session').fetchall(), 'events': db.execute('SELECT session, seq, hash, hex(event) FROM events ORDER BY session, seq').fetchall()}))`, path.join(scratch, 'state', 'sessions', 'journal.db')], { encoding: 'utf8' }));
+    },
     async rawPost(route, instance, body) {
       const bootstrap = await fetch(engineURL + '/'); await bootstrap.body.cancel();
       return fetch(engineURL + route, { method: 'POST', headers: { Cookie: bootstrap.headers.getSetCookie().find(value => value.startsWith('canvas-local=')).split(';')[0], Origin: engineURL, 'Content-Type': 'application/json', 'X-Canvas-Instance': instance }, body: JSON.stringify(body) });
@@ -134,6 +140,167 @@ test('document-only edit iframe keeps exact lost request, reviews a scoped nativ
   assert.equal(p.posts.filter(post => post.path === '/api/review').length, 1);
   assert.equal((await p.api('/api/demo')).providerCalls, 1);
   assert.deepEqual(p.errors, []);
+});
+
+test('document edit real engine restart and fresh bridge reopen recover a retained request without replay', async t => {
+  const p = await flowPanel(t, undefined, false, async (page, bridge) => {
+    await page.route(bridge.origin + '/api/edit/request', async route => { await route.fetch(); await route.abort('failed'); });
+  });
+  const actualFrame = () => p.page.frames().find(frame => frame.url().startsWith(p.bridge.origin));
+  const pending = () => actualFrame().evaluate(() => JSON.parse(sessionStorage.getItem('canvas-pending-edit')));
+  await p.ready();
+  const before = await p.api('/api/state'), oldDemo = await p.api('/api/demo');
+  const oldBridge = { origin: p.bridge.origin, url: p.bridge.url }, parentURL = p.page.url();
+  await p.frame.locator('#edit-kind').selectOption('json-pointer');
+  await p.frame.locator('#edit-pointer').fill('/title');
+  await p.frame.locator('#edit-instruction').fill('Revise this fictional title before a real engine restart.');
+  await p.frame.locator('#edit-confirm:not(:disabled)').check();
+  await p.frame.locator('#edit-request:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Exact request retained' }).waitFor();
+  await p.frame.getByText('Edit record', { exact: true }).click();
+  await p.frame.locator('#edit-detail').filter({ hasText: '"state": "proposal"' }).waitFor(); await p.ready();
+  const saved = await pending();
+  assert.deepEqual(saved.body, p.posts[0].body);
+  const original = (await p.api('/api/edits')).edits[0];
+  const proposed = await p.api('/api/state');
+  const attempt = proposed.runs.find(run => run.id === original.attempt);
+  assert.ok(original.id); assert.ok(original.proposal); assert.ok(attempt.session);
+  assert.equal(attempt.editID, original.id); assert.equal(attempt.proposal, original.proposal);
+  assert.equal(proposed.head, before.head);
+  assert.equal(proposed.proposals.find(proposal => proposal.id === original.proposal).status, 'pending');
+  assert.equal((await p.api('/api/demo')).providerCalls, 1);
+  const native = p.nativeHistory();
+  assert.deepEqual(native.sessions, [[attempt.session]]); assert.ok(native.events.length > 0);
+  const postCount = p.posts.length;
+
+  // This stops the actual Go process and restarts it on the same port/state.
+  await p.restart();
+  await p.frame.locator('#refresh').click();
+  await p.frame.locator('#connection').filter({ hasText: /[Rr]eopen/ }).waitFor();
+  const fenced = await fetch(oldBridge.origin + '/api/edits', { headers: { 'x-canvas-review-token': new URL(oldBridge.url).hash.slice('#token='.length) } });
+  assert.equal(fenced.status, 409); assert.equal((await fenced.json()).recovery, 'reopen');
+  assert.equal(await p.frame.locator('#edit-continue').isDisabled(), true);
+  assert.equal(await p.frame.locator('#accept').isDisabled(), true);
+  assert.deepEqual(await pending(), saved, 'the old boot-bound request is not rebound or cleared');
+  assert.equal(p.posts.length, postCount); assert.deepEqual(p.nativeHistory(), native);
+
+  // The extension closes its bridge, starts a port-0/capability bridge and
+  // reopens its iframe; the containing browser page remains the same origin.
+  await p.reopen();
+  assert.equal(p.page.url(), parentURL);
+  assert.notEqual(p.bridge.origin, oldBridge.origin);
+  assert.notEqual(new URL(p.bridge.url).hash, new URL(oldBridge.url).hash);
+  assert.equal(await pending(), null, 'fresh iframe origin does not inherit the old exact command');
+  assert.equal(await p.frame.locator('#edit-continue').isVisible(), false);
+  const reopenedDemo = await p.api('/api/demo');
+  assert.notEqual(reopenedDemo.boot, oldDemo.boot);
+  assert.equal(reopenedDemo.activeInstance, oldDemo.activeInstance);
+  assert.equal(reopenedDemo.providerCalls, 0, 'provider counter resets each boot; reopening dispatches nothing');
+  const reopened = (await p.api('/api/edits')).edits[0];
+  assert.equal(reopened.state, 'uncertain');
+  assert.equal(reopened.id, original.id); assert.equal(reopened.attempt, original.attempt); assert.equal(reopened.proposal, original.proposal);
+  const state = await p.api('/api/state');
+  assert.equal(state.head, before.head); assert.equal(state.runs.length, proposed.runs.length);
+  assert.equal(state.runs.find(run => run.id === original.attempt).session, attempt.session);
+  assert.deepEqual(state.proposals, proposed.proposals);
+  await p.frame.locator('#refresh').click(); await p.ready();
+  assert.equal(p.posts.length, postCount, 'GET/reopen never replays or automatically accepts');
+  assert.deepEqual(p.nativeHistory(), native, 'no new session or native events during reopen/readback');
+  assert.equal((await p.api('/api/demo')).providerCalls, 0);
+  assert.equal(await p.frame.locator('#accept').isDisabled(), true);
+
+  await p.frame.locator('#edit-command-confirm:not(:disabled)').check();
+  await p.frame.locator('#edit-reconcile:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Edit: proposal' }).waitFor(); await p.ready();
+  assert.equal((await p.api('/api/edits')).edits[0].proposal, original.proposal);
+  assert.equal((await p.api('/api/state')).head, before.head);
+  assert.equal(await p.frame.locator('#document-confirm').isChecked(), false);
+  assert.deepEqual(p.nativeHistory(), native, 'explicit Reconcile reads the existing native execution');
+  assert.equal((await p.api('/api/demo')).providerCalls, 0);
+  await p.frame.locator('#document-confirm:not(:disabled)').check();
+  await p.frame.locator('#accept:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Edit: accepted' }).waitFor(); await p.ready();
+  const accepted = await p.api('/api/state'), edits = await p.api('/api/edits');
+  assert.notEqual(accepted.head, before.head); assert.equal(edits.slot, ''); assert.equal(edits.edits.length, 1);
+  assert.equal(edits.edits[0].acceptedCommit, accepted.head);
+  assert.equal(edits.edits[0].attempt, original.attempt); assert.equal(edits.edits[0].proposal, original.proposal);
+  assert.equal(accepted.proposals.length, proposed.proposals.length);
+  assert.equal(accepted.runs.length, proposed.runs.length);
+  assert.equal(accepted.runs.find(run => run.id === original.attempt).session, attempt.session);
+  await p.frame.locator('#refresh').click(); await p.ready();
+  assert.equal((await p.api('/api/state')).head, accepted.head);
+  assert.deepEqual(p.nativeHistory(), native); assert.equal((await p.api('/api/demo')).providerCalls, 0);
+  assert.deepEqual(p.posts.map(post => post.path), ['/api/edit/request', '/api/edit/reconcile', '/api/review']);
+  assert.equal((await p.api('/api/flows')).runs.length, 0);
+  assert.deepEqual(p.errors, []);
+});
+
+test('document edit app blocks review after a lost real Reconcile reply until exact continuation', async t => {
+  const p = await flowPanel(t); await p.ready();
+  const actualFrame = () => p.page.frames().find(frame => frame.url().startsWith(p.bridge.origin));
+  const pending = () => actualFrame().evaluate(() => JSON.parse(sessionStorage.getItem('canvas-pending-edit')));
+  const before = await p.api('/api/state');
+  await p.frame.locator('#edit-kind').selectOption('json-pointer');
+  await p.frame.locator('#edit-pointer').fill('/title');
+  await p.frame.locator('#edit-instruction').fill('Revise this fictional title before maintenance.');
+  await p.frame.locator('#edit-confirm:not(:disabled)').check();
+  await p.frame.locator('#edit-request:not(:disabled)').click();
+  await p.frame.getByText('Edit record', { exact: true }).click();
+  await p.frame.locator('#edit-detail').filter({ hasText: '"state": "proposal"' }).waitFor(); await p.ready();
+  const original = (await p.api('/api/edits')).edits[0], native = p.nativeHistory();
+  assert.equal(await p.frame.locator('#document-confirm').isDisabled(), false);
+  let loseReply = true;
+  await p.page.route(p.bridge.origin + '/api/edit/reconcile', async route => {
+    if (loseReply) {
+      loseReply = false;
+      // Exercise real native intent/readback successfully, then lose only the
+      // HTTP reply. This is not a native failure injected after intent.
+      const response = await route.fetch(); assert.equal(response.status(), 200);
+      assert.equal((await response.json()).id, original.id);
+      await route.abort('failed');
+    } else await route.continue();
+  });
+  await p.frame.locator('#edit-command-confirm:not(:disabled)').check();
+  await p.frame.locator('#edit-reconcile:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Exact request retained' }).waitFor(); await p.ready();
+  const saved = await pending(), postCount = p.posts.length;
+  assert.equal(saved.route, '/api/edit/reconcile'); assert.equal(saved.body.expectedHead, before.head);
+  assert.equal((await p.api('/api/edits')).edits[0].state, 'proposal', 'real proposal remains reviewable on the engine');
+  assert.equal(await p.frame.locator('#document-confirm').isDisabled(), true, 'app must not bypass retained command via editGate');
+  for (const id of ['accept', 'reject']) {
+    assert.equal(await p.frame.locator('#' + id).isDisabled(), true);
+    assert.equal(await p.frame.locator('#' + id).isVisible(), false);
+  }
+  await p.frame.locator('#refresh').click(); await p.ready();
+  await p.page.reload(); await p.ready();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Exact request retained' }).waitFor();
+  assert.deepEqual(await pending(), saved);
+  assert.equal(p.posts.length, postCount, 'refresh/reload never posts the retained maintenance command');
+  assert.equal((await p.api('/api/state')).head, before.head);
+  assert.equal(await p.frame.locator('#document-confirm').isDisabled(), true);
+  assert.equal(await p.frame.locator('#accept').isDisabled(), true); assert.equal(await p.frame.locator('#reject').isDisabled(), true);
+  assert.deepEqual(p.nativeHistory(), native); assert.equal((await p.api('/api/demo')).providerCalls, 1);
+
+  await p.frame.locator('#edit-continue:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Edit: proposal' }).waitFor(); await p.ready();
+  const maintenance = p.posts.filter(post => post.path === '/api/edit/reconcile');
+  assert.equal(maintenance.length, 2); assert.deepEqual(maintenance[1].body, maintenance[0].body);
+  assert.deepEqual(maintenance[1].body, saved.body); assert.equal(await pending(), null);
+  assert.equal(await p.frame.locator('#document-confirm').isChecked(), false);
+  assert.equal(await p.frame.locator('#document-confirm').isDisabled(), false);
+  assert.equal(await p.frame.locator('#accept').isVisible(), true); assert.equal(await p.frame.locator('#reject').isVisible(), true);
+  assert.equal(await p.frame.locator('#accept').isDisabled(), true, 'fresh human confirmation is still required');
+  assert.equal((await p.api('/api/state')).head, before.head);
+  await p.frame.locator('#document-confirm:not(:disabled)').check();
+  await p.frame.locator('#accept:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Edit: accepted' }).waitFor(); await p.ready();
+  const accepted = await p.api('/api/state'), edits = await p.api('/api/edits');
+  assert.notEqual(accepted.head, before.head); assert.equal(edits.edits.length, 1); assert.equal(edits.slot, '');
+  assert.equal(edits.edits[0].attempt, original.attempt); assert.equal(edits.edits[0].proposal, original.proposal);
+  assert.equal(edits.edits[0].acceptedCommit, accepted.head); assert.equal(accepted.proposals.length, 1);
+  assert.deepEqual(p.nativeHistory(), native); assert.equal((await p.api('/api/demo')).providerCalls, 1);
+  assert.deepEqual(p.posts.map(post => post.path), ['/api/edit/request', '/api/edit/reconcile', '/api/edit/reconcile', '/api/review']);
+  assert.equal((await p.api('/api/flows')).runs.length, 0); assert.deepEqual(p.errors, []);
 });
 
 test('document-only edit iframe refuses native scope escape without changing accepted Git state or starting a flow', async t => {

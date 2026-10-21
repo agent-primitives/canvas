@@ -83,6 +83,46 @@ test('edit maintenance releases only proven unreserved refusals and retains exac
  }
 });
 
+test('proposal review stays fenced after a recorded maintenance error until explicit exact continuation', async () => {
+ const {createEditPanel}=await loadPanel(),nodes=new Map();
+ global.document={getElementById(id){if(!nodes.has(id))nodes.set(id,{value:'',checked:false,disabled:false,hidden:false,textContent:'',add(){},replaceChildren(){}});return nodes.get(id)}};
+ global.Option=class{};global.crypto||=require('node:crypto').webcrypto;
+ let saved=null;global.sessionStorage={getItem:()=>saved,setItem(key,value){saved=value},removeItem(){saved=null}};
+ const edit={id:'edit-1',state:'proposal',proposal:'proposal-1',request:{document:'prd',role:'GM'}},posts=[];
+ let rejectRead, failure;
+ const api=async(route,body)=>{
+  if(body){posts.push({route,body:structuredClone(body)});if(posts.length===1)return new Promise((resolve,reject)=>{rejectRead=reject});return edit}
+  if(route==='/api/edits')return {slot:edit.id,edits:[edit],documents:[{id:'prd',path:'prd.json'}]};
+  return {document:'prd',baseRevision:'head-1',flowRun:'',content:'{"title":"Before"}'};
+ };
+ const panel=createEditPanel({api,action:async cb=>{try{await cb()}catch(error){failure=error}},selectionChanged(){}});
+ const refresh=()=>panel.refresh({head:'head-1'},{boot:'boot-1',activeInstance:'instance-1'});
+ await refresh();panel.controls(true,true);
+ assert.equal(panel.isGate(edit.proposal),true);
+ nodes.get('edit-command-confirm').checked=true;
+ const command=nodes.get('edit-reconcile').onclick();
+ const inFlightGate=panel.isGate(edit.proposal);
+ // A recorded command's failure is not an unreserved EDIT_REFUSED. Retain it.
+ rejectRead(Object.assign(new Error('native read failed after intent recorded'),{code:'EDIT_CONFLICT',status:409,uncertain:false}));
+ await command;await refresh();
+ assert.match(failure.message,/native read failed/);
+ assert.ok(saved);assert.equal(panel.blocked(),true);
+ assert.equal(panel.isGate(edit.proposal),false,'pending exact maintenance must fence proposal review');
+ assert.equal(inFlightGate,false,'an in-flight exact command must fence proposal review too');
+ assert.equal(JSON.parse(saved).body.expectedHead,'head-1');assert.equal(posts.length,1,'refresh never reposts');
+ for(const metadata of [{boot:'boot-2',activeInstance:'instance-1'},{boot:'boot-1',activeInstance:'foreign'}]){
+  await panel.refresh({head:'head-1'},metadata);panel.controls(true,true);
+  assert.equal(nodes.get('edit-continue').disabled,true);
+  assert.equal(panel.isGate(edit.proposal),false);
+  await nodes.get('edit-continue').onclick();assert.equal(posts.length,1,'foreign boot/instance cannot continue');
+ }
+ await refresh();panel.controls(true,true);
+ await nodes.get('edit-continue').onclick();await refresh();
+ assert.deepEqual(posts[1],posts[0],'explicit continuation preserves expected head, nonce and complete body');
+ assert.equal(saved,null);assert.equal(nodes.get('edit-continue').hidden,true);
+ assert.equal(panel.isGate(edit.proposal),true,'fresh human review becomes available only after confirmed continuation');
+});
+
 test('flow edit rerun maintenance releases only proven unreserved refusals and retains exact unknown commands', async () => {
  const {createEditPanel}=await loadPanel();
  for(const refused of [true,false]) {
