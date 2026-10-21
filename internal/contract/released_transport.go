@@ -17,20 +17,21 @@ import (
 	"syscall"
 	"time"
 
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
+	"github.com/agent-primitives/suite/oci"
 )
 
 const releaseManifestType = "application/vnd.oci.image.manifest.v1+json"
 
 type releaseDescriptor struct {
-	MediaType    string               `json:"mediaType"`
-	Digest       string               `json:"digest"`
-	Size         int64                `json:"size"`
-	ArtifactType string               `json:"artifactType,omitempty"`
-	Annotations  map[string]string    `json:"annotations,omitempty"`
-	Platform     *agentsuite.Platform `json:"platform,omitempty"`
-	URLs         json.RawMessage      `json:"urls,omitempty"`
-	Data         json.RawMessage      `json:"data,omitempty"`
+	MediaType    string            `json:"mediaType"`
+	Digest       string            `json:"digest"`
+	Size         int64             `json:"size"`
+	ArtifactType string            `json:"artifactType,omitempty"`
+	Annotations  map[string]string `json:"annotations,omitempty"`
+	Platform     *core.Platform    `json:"platform,omitempty"`
+	URLs         json.RawMessage   `json:"urls,omitempty"`
+	Data         json.RawMessage   `json:"data,omitempty"`
 }
 type releaseIndex struct {
 	SchemaVersion int                 `json:"schemaVersion"`
@@ -65,7 +66,7 @@ func releaseReference(ref string) (string, string, error) {
 	if len(ref) > 1024 {
 		return "", "", errSuite
 	}
-	if agentsuite.IsValidDigest(ref) {
+	if core.IsValidDigest(ref) {
 		return ref, "", nil
 	}
 	if strings.Count(ref, "@") != 1 {
@@ -73,7 +74,7 @@ func releaseReference(ref string) (string, string, error) {
 	}
 	location, pin, _ := strings.Cut(ref, "@")
 	host, repository, ok := strings.Cut(location, "/")
-	if !ok || host == "" || !agentsuite.IsValidDigest(pin) {
+	if !ok || host == "" || !core.IsValidDigest(pin) {
 		return "", "", errSuite
 	}
 	u, err := url.Parse("https://" + host)
@@ -248,7 +249,7 @@ func readReleaseCache(root *os.Root, key, pin string) (map[string]retainedFile, 
 // the existing archive format's base64 byte fields, which suite's typed codec omits.
 func decodeReleaseJSON(data []byte, out any) error {
 	var value any
-	if agentsuite.Unmarshal(data, &value) != nil {
+	if core.Unmarshal(data, &value) != nil {
 		return errSuite
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
@@ -276,7 +277,7 @@ func validateReleaseLayout(files map[string]retainedFile, pin string) error {
 	if copiedView(layout, files) != nil {
 		return errSuite
 	}
-	if _, err := agentsuite.ValidatePath(layout); err != nil {
+	if _, err := oci.ValidatePath(layout); err != nil {
 		return errSuite
 	}
 	return nil
@@ -332,14 +333,14 @@ func (r *ReleaseResolver) fetch(ref string) (map[string]retainedFile, error) {
 		return nil, errSuite
 	}
 	var manifest releaseManifest
-	if agentsuite.Unmarshal(raw, &manifest) != nil || manifest.SchemaVersion != 2 || manifest.ArtifactType != agentsuite.MediaTypeArtifact || manifest.Subject != nil || len(manifest.Layers) > 32 {
+	if core.Unmarshal(raw, &manifest) != nil || manifest.SchemaVersion != 2 || manifest.ArtifactType != core.MediaTypeArtifact || manifest.Subject != nil || len(manifest.Layers) > 32 {
 		return nil, errSuite
 	}
 	descriptor := releaseDescriptor{MediaType: releaseManifestType, Digest: pin, Size: int64(len(raw))}
 	index, _ := json.Marshal(releaseIndex{SchemaVersion: 2, Manifests: []releaseDescriptor{descriptor}})
 	files := map[string]retainedFile{"oci-layout": {Data: []byte(`{"imageLayoutVersion":"1.0.0"}`), Mode: 0600}, "index.json": {Data: index, Mode: 0600}, "blobs/sha256/" + strings.TrimPrefix(pin, "sha256:"): {Data: raw, Mode: 0600}}
 	for _, d := range append([]releaseDescriptor{manifest.Config}, manifest.Layers...) {
-		if !agentsuite.IsValidDigest(d.Digest) || d.Size < 0 || len(d.URLs) != 0 || len(d.Data) != 0 {
+		if !core.IsValidDigest(d.Digest) || d.Size < 0 || len(d.URLs) != 0 || len(d.Data) != 0 {
 			return nil, errSuite
 		}
 		key := "blobs/sha256/" + strings.TrimPrefix(d.Digest, "sha256:")

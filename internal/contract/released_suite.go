@@ -15,7 +15,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
+	"github.com/agent-primitives/suite/oci"
 )
 
 var ErrReleaseProfile = errors.New("unsupported released runtime profile; evaluation not verified (export unavailable for this profile)")
@@ -102,7 +103,7 @@ func parseReleasedArchive(data []byte) (Bundle, error) {
 }
 
 func releasedBundle(a releasedArchive) (Bundle, error) {
-	if a.Version != "canvas.local/release-execution-v1" || a.Kind != "ReleasedSuiteExecution" || !namePattern.MatchString(a.ID) || !agentsuite.IsValidDigest(a.Pin) || len(a.Expected) > 1<<20 || len(a.Evidence) > 1<<20 {
+	if a.Version != "canvas.local/release-execution-v1" || a.Kind != "ReleasedSuiteExecution" || !namePattern.MatchString(a.ID) || !core.IsValidDigest(a.Pin) || len(a.Expected) > 1<<20 || len(a.Evidence) > 1<<20 {
 		return Bundle{}, errSuite
 	}
 	content, manifest, err := releaseContent(a.Artifact, a.Pin)
@@ -118,20 +119,20 @@ func releasedBundle(a releasedArchive) (Bundle, error) {
 	if copiedView(layout, a.Artifact) != nil || copiedView(directory, content) != nil {
 		return Bundle{}, errSuite
 	}
-	report, err := agentsuite.ValidatePath(layout)
+	report, err := oci.ValidatePath(layout)
 	if err != nil {
 		return Bundle{}, errSuite
 	}
-	diff, err := agentsuite.DiffPaths(directory, layout)
+	diff, err := oci.DiffPaths(directory, layout)
 	if err != nil || diff.After.ArtifactDigest != a.Pin || diff.Before.ContentDigest != diff.After.ContentDigest {
 		return Bundle{}, errSuite
 	}
-	var suite agentsuite.Suite
+	var suite core.Suite
 	raw := content["agentsuite.json"].Data
-	if agentsuite.Unmarshal(raw, &suite) != nil || len(suite.Extensions) != 0 || len(suite.Capabilities) != 0 {
+	if core.Unmarshal(raw, &suite) != nil || len(suite.Extensions) != 0 || len(suite.Capabilities) != 0 {
 		return Bundle{}, errSuite
 	}
-	var selected agentsuite.CompositionSelection
+	var selected core.CompositionSelection
 	count := 0
 	for _, s := range report.CompositionSelections {
 		if s.Agent == a.Member && s.Platform.String() == a.Platform && s.RuntimeProfile == a.RuntimeProfile {
@@ -146,7 +147,7 @@ func releasedBundle(a releasedArchive) (Bundle, error) {
 	if selected.RuntimeProfile != "" {
 		return Bundle{}, ErrReleaseProfile
 	}
-	var member agentsuite.ManifestRef
+	var member core.ManifestRef
 	count = 0
 	for _, m := range suite.Agents {
 		if m.ID == a.Member {
@@ -154,14 +155,14 @@ func releasedBundle(a releasedArchive) (Bundle, error) {
 			count++
 		}
 	}
-	var agent agentsuite.Agent
-	if count != 1 || agentsuite.Unmarshal(content[member.Path].Data, &agent) != nil || !modelOnlyAgent(agent) || agent.Policy != nil {
+	var agent core.Agent
+	if count != 1 || core.Unmarshal(content[member.Path].Data, &agent) != nil || !modelOnlyAgent(agent) || agent.Policy != nil {
 		return Bundle{}, errSuite
 	}
-	var composition agentsuite.Composition
+	var composition core.Composition
 	for _, c := range suite.Compositions {
 		if c.Descriptor.Digest == selected.Digest {
-			if agentsuite.Unmarshal(content[c.Path].Data, &composition) != nil {
+			if core.Unmarshal(content[c.Path].Data, &composition) != nil {
 				return Bundle{}, errSuite
 			}
 		}
@@ -169,12 +170,12 @@ func releasedBundle(a releasedArchive) (Bundle, error) {
 	if composition.Agent != a.Member || composition.Platform.String() != a.Platform || len(composition.ToolProviders) != 0 {
 		return Bundle{}, errSuite
 	}
-	var build agentsuite.BuildProfile
+	var build core.BuildProfile
 	var buildDigest string
 	for _, r := range suite.BuildProfiles {
 		if r.ID == selected.BuildProfile {
 			buildDigest = r.Descriptor.Digest
-			if agentsuite.Unmarshal(content[r.Path].Data, &build) != nil {
+			if core.Unmarshal(content[r.Path].Data, &build) != nil {
 				return Bundle{}, errSuite
 			}
 		}
@@ -182,7 +183,7 @@ func releasedBundle(a releasedArchive) (Bundle, error) {
 	if buildDigest == "" || build.Execution != nil {
 		return Bundle{}, errSuite
 	}
-	image := func(images []agentsuite.PlatformImage) (string, error) {
+	image := func(images []core.PlatformImage) (string, error) {
 		found := ""
 		for _, im := range images {
 			if im.Platform == selected.Platform {
@@ -209,11 +210,11 @@ func releasedBundle(a releasedArchive) (Bundle, error) {
 	if len(instruction) == 0 || len(instruction) > 65536 || !utf8.Valid(instruction) {
 		return Bundle{}, errSuite
 	}
-	graph, err := agentsuite.Digest(raw)
+	graph, err := core.Digest(raw)
 	if err != nil {
 		return Bundle{}, errSuite
 	}
-	identity := &SuiteIdentity{Digest: a.Pin, ContentDigest: diff.After.ContentDigest, GraphDigest: graph, Member: member.ID, MemberDigest: member.Descriptor.Digest, Compositions: []agentsuite.CompositionSelection{selected}, Release: &ReleaseIdentity{AuthoredModel: agent.Model.Model, SchemaVersion: suite.SchemaVersion, Platform: a.Platform, RuntimeProfile: a.RuntimeProfile, CompositionDigest: selected.Digest, BuildProfile: selected.BuildProfile, BuildProfileDigest: buildDigest, RuntimeImage: runtimeImage, HarnessImage: harnessImage, CanvasRuntime: "canvas-local/bundle-v4; execution not qualified by release evaluation"}}
+	identity := &SuiteIdentity{Digest: a.Pin, ContentDigest: diff.After.ContentDigest, GraphDigest: graph, Member: member.ID, MemberDigest: member.Descriptor.Digest, Compositions: []core.CompositionSelection{selected}, Release: &ReleaseIdentity{AuthoredModel: agent.Model.Model, SchemaVersion: suite.SchemaVersion, Platform: a.Platform, RuntimeProfile: a.RuntimeProfile, CompositionDigest: selected.Digest, BuildProfile: selected.BuildProfile, BuildProfileDigest: buildDigest, RuntimeImage: runtimeImage, HarnessImage: harnessImage, CanvasRuntime: "canvas-local/bundle-v4; execution not qualified by release evaluation"}}
 	identity.Release.Evaluation = verifyReleaseEvaluation(layout, a, manifest, identity, agent)
 	data, err := json.Marshal(a)
 	if err != nil || len(data) > maxArchive {
@@ -237,7 +238,7 @@ func releaseContent(files map[string]retainedFile, pin string) (map[string]retai
 		}
 	}
 	var index releaseIndex
-	if agentsuite.Unmarshal(files["index.json"].Data, &index) != nil || index.SchemaVersion != 2 || len(index.Manifests) != 1 {
+	if core.Unmarshal(files["index.json"].Data, &index) != nil || index.SchemaVersion != 2 || len(index.Manifests) != 1 {
 		return nil, zero, errSuite
 	}
 	desc := index.Manifests[0]
@@ -249,12 +250,12 @@ func releaseContent(files map[string]retainedFile, pin string) (map[string]retai
 		return nil, zero, errSuite
 	}
 	var manifest releaseManifest
-	if agentsuite.Unmarshal(raw, &manifest) != nil {
+	if core.Unmarshal(raw, &manifest) != nil {
 		return nil, zero, errSuite
 	}
 	var layer []byte
 	for _, d := range manifest.Layers {
-		if d.MediaType == agentsuite.MediaTypeContent {
+		if d.MediaType == core.MediaTypeContent {
 			if layer != nil {
 				return nil, zero, errSuite
 			}
@@ -311,7 +312,7 @@ func releaseContent(files map[string]retainedFile, pin string) (map[string]retai
 }
 
 func releaseBlob(files map[string]retainedFile, d releaseDescriptor) ([]byte, error) {
-	if !agentsuite.IsValidDigest(d.Digest) || d.Size < 0 || d.Size > 1<<20 || len(d.URLs) != 0 || len(d.Data) != 0 {
+	if !core.IsValidDigest(d.Digest) || d.Size < 0 || d.Size > 1<<20 || len(d.URLs) != 0 || len(d.Data) != 0 {
 		return nil, errSuite
 	}
 	raw, ok := files["blobs/sha256/"+strings.TrimPrefix(d.Digest, "sha256:")]

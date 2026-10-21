@@ -18,7 +18,7 @@ import (
 
 	"github.com/agent-primitives/canvas/internal/contract"
 	"github.com/agent-primitives/canvas/internal/sharedspace"
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
 	"github.com/google/jsonschema-go/jsonschema"
 	"go.yaml.in/yaml/v3"
 )
@@ -433,7 +433,7 @@ func loadGenericDefinition(filename string, resolver *contract.ReleaseResolver, 
 	loadFlowSchema := func(source string) (*jsonschema.Resolved, error) {
 		resolved, err := loadSchema(source)
 		var value any
-		if err != nil || agentsuite.Unmarshal(schemas[source], &value) != nil || !preservesJSONNumbers(value) {
+		if err != nil || core.Unmarshal(schemas[source], &value) != nil || !preservesJSONNumbers(value) {
 			return nil, errDefinition
 		}
 		return resolved, nil
@@ -464,7 +464,7 @@ func loadGenericDefinition(filename string, resolver *contract.ReleaseResolver, 
 }
 func compileDocumentSchema(raw []byte) (*jsonschema.Resolved, error) {
 	var value any
-	if agentsuite.Unmarshal(raw, &value) != nil || !localSchemaRefs(value) {
+	if core.Unmarshal(raw, &value) != nil || !localSchemaRefs(value) {
 		return nil, errDefinition
 	}
 	var schema jsonschema.Schema
@@ -506,7 +506,7 @@ func validateDocument(doc compiledDocument, content string) error {
 		// Public strict decoding uses json.Number, which jsonschema-go v0.4.3
 		// classifies as a string. After strict/lossless validation, decode into
 		// standard JSON values so numeric types reach schema validation intact.
-		if agentsuite.Unmarshal([]byte(content), &instance) != nil || json.Unmarshal([]byte(content), &instance) != nil || doc.schema.Validate(instance) != nil {
+		if core.Unmarshal([]byte(content), &instance) != nil || json.Unmarshal([]byte(content), &instance) != nil || doc.schema.Validate(instance) != nil {
 			return errors.New("document does not satisfy schema")
 		}
 	}

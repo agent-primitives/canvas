@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
 )
 
 func TestReleasedArchiveRefusesPathEscapeBeforeExtraction(t *testing.T) {
@@ -15,13 +15,13 @@ func TestReleasedArchiveRefusesPathEscapeBeforeExtraction(t *testing.T) {
 	if err := os.WriteFile(witness, []byte("outside content"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	control := repackedRelease(t, func(map[string]retainedFile, *agentsuite.Suite) {})
+	control := repackedRelease(t, func(map[string]retainedFile, *core.Suite) {})
 	if _, err := LoadReleasedSuite("control", control, nil); err != nil {
 		t.Fatal("valid repacked release refused", err)
 	}
 	for _, name := range []string{"../../escape", "dir/../../../escape", witness, `..\..\escape`, ".hidden", "dir/../escape"} {
 		t.Run(name, func(t *testing.T) {
-			ref := repackedRelease(t, func(content map[string]retainedFile, _ *agentsuite.Suite) {
+			ref := repackedRelease(t, func(content map[string]retainedFile, _ *core.Suite) {
 				content[name] = retainedFile{Data: []byte("attack"), Mode: 0644}
 			})
 			// The helper recomputes layer/manifest digests, so a bad digest
