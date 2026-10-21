@@ -24,6 +24,7 @@ spec:
       schema: schemas/feedback.json
       title: Fictional observations
     prd:
+      editAgent: writer
       path: prd.json
       schema: schemas/prd.json
       title: Proposed PRD

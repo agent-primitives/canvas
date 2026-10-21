@@ -531,6 +531,9 @@ func (c *Canvas) DecideAnnouncement(ctx context.Context, id, role string, approv
 	}
 	c.publicationMu.Lock()
 	defer c.publicationMu.Unlock()
+	if err := c.editFence(); err != nil {
+		return err
+	}
 	if !c.flowRole(role) || !confirmation.Confirmed {
 		return errAnnouncement
 	}
@@ -541,7 +544,7 @@ func (c *Canvas) DecideAnnouncement(ctx context.Context, id, role string, approv
 		return err
 	}
 	c.mu.Lock()
-	allowed := c.flowActionAllowedLocked(op)
+	allowed := c.data.EditSlot == "" && c.flowActionAllowedLocked(op)
 	c.mu.Unlock()
 	if !allowed || op.FlowRun != "" && v.Newer {
 		return ErrFlowConflict
@@ -593,6 +596,9 @@ func (c *Canvas) resumeAnnouncement(ctx context.Context, id, role string, confir
 	}
 	c.publicationMu.Lock()
 	defer c.publicationMu.Unlock()
+	if err := c.editFence(); err != nil {
+		return err
+	}
 	if !c.flowRole(role) || !confirmation.Confirmed {
 		return errAnnouncement
 	}

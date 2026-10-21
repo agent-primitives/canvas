@@ -29,6 +29,7 @@ import (
 )
 
 type Run struct {
+	EditID   string `json:"editID,omitempty"`
 	FlowRun  string `json:"flowRun,omitempty"`
 	FlowStep string `json:"flowStep,omitempty"`
 	// Reviewer is the legacy alias for the verified requester, never an owner.
@@ -88,7 +89,9 @@ type attempt struct {
 	FlowGeneration uint64            `json:"flowGeneration,omitempty"`
 }
 type ledger struct {
-	Flows []flowRunRecord `json:"flows,omitempty"`
+	EditSlot string          `json:"editSlot,omitempty"`
+	Edits    []editRecord    `json:"edits,omitempty"`
+	Flows    []flowRunRecord `json:"flows,omitempty"`
 	// ExecutionOwner binds this state to one configured service identity once a
 	// service-owned attempt is journaled; rotation requires new state.
 	ExecutionOwner   api.IdentityRef         `json:"executionOwner,omitzero"`
@@ -255,6 +258,10 @@ func openCanvas(root string, space sharedspace.SharedSpace, cl *client.Client, a
 		}
 	}
 	c.reopenFlowsLocked()
+	if err := c.reopenEditsLocked(); err != nil {
+		cancel()
+		return nil, err
+	}
 	if !validRole(c.data.Role) {
 		c.data.Role = "GM"
 	}
@@ -429,6 +436,7 @@ func (c *Canvas) update(id string, f func(*attempt)) error {
 	previousActivity := len(a.Activity)
 	f(a)
 	c.observeFlowAttemptLocked(a)
+	c.observeEditAttemptLocked(a)
 	if err := c.saveLocked(); err != nil {
 		// Only an unpersisted finish from this update is uncertain. A later
 		// bookkeeping failure must not erase an already-recorded completion.
@@ -578,9 +586,15 @@ func (c *Canvas) execute(id string) {
 			finish(errors.New("bundle execution config unsupported"))
 			return
 		}
-		if a.FlowRun != "" {
+		if a.FlowRun != "" || a.EditID != "" {
 			allowed := false
-			if err := c.update(id, func(saved *attempt) { allowed = c.claimFlowDispatchStageLocked(saved, "create-intent") }); err != nil {
+			if err := c.update(id, func(saved *attempt) {
+				if saved.EditID != "" {
+					allowed = c.claimEditDispatchLocked(saved, "create-intent")
+				} else {
+					allowed = c.claimFlowDispatchStageLocked(saved, "create-intent")
+				}
+			}); err != nil {
 				return
 			}
 			if !allowed {
@@ -625,7 +639,9 @@ func (c *Canvas) execute(id string) {
 		a.Harness = session.GetHarness()
 		seq := session.GetLastSeq()
 		a.ExpectedSeq = &seq
-		if a.FlowRun != "" {
+		if a.EditID != "" {
+			dispatchAllowed = c.claimEditDispatchLocked(a, "exec-intent")
+		} else if a.FlowRun != "" {
 			dispatchAllowed = c.claimFlowDispatchStageLocked(a, "exec-intent")
 		}
 	}); err != nil {
@@ -648,7 +664,7 @@ func (c *Canvas) execute(id string) {
 		finish(err)
 		return
 	}
-	if a.FlowRun != "" {
+	if a.FlowRun != "" || a.EditID != "" {
 		if err := c.update(id, func(saved *attempt) { saved.FlowStage = "completed" }); err != nil {
 			return
 		}
@@ -666,6 +682,9 @@ func (c *Canvas) execute(id string) {
 // publishRunOutput preserves the original snapshot, validation and independent
 // proposal review path for both fresh execution and confirmed recovery.
 func (c *Canvas) publishRunOutput(a attempt, turn *client.TurnResult, session *v1.Session) (string, error) {
+	if a.EditID != "" {
+		return c.publishEditOutput(a, turn, session)
+	}
 	id, uid, digest := a.ID, session.GetMetadata().GetUid(), session.GetAnnotations()["bundle-digest"]
 	failureReason := ""
 	var changes map[string]string
@@ -859,7 +878,7 @@ func (c *Canvas) RegenerateContext(ctx context.Context, proposal, role string) (
 		}
 	}
 	c.mu.Unlock()
-	if previous != nil && previous.FlowRun != "" {
+	if previous != nil && (previous.FlowRun != "" || previous.EditID != "") {
 		return "", ErrFlowConflict
 	}
 	if previous == nil {

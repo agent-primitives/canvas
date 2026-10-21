@@ -112,6 +112,9 @@ func prepareRuntime(root, state, definitionPath string, options engineOptions, f
 	provider := func(_ context.Context, req api.ModelRequest) (api.ModelResponse, error) {
 		calls.Add(1)
 		var input struct {
+			Edit *struct {
+				Document string `json:"document"`
+			} `json:"edit"`
 			Mode     string            `json:"mode"`
 			Agent    string            `json:"agent"`
 			Request  string            `json:"request"`
@@ -129,7 +132,13 @@ func prepareRuntime(root, state, definitionPath string, options engineOptions, f
 		default:
 			return api.ModelResponse{}, errors.New("unsupported demo agent")
 		}
-		if options.flowAgentRuns > 0 {
+		if input.Edit != nil {
+			var err error
+			changes, err = fixtureEditChanges(definition, input.Edit.Document, input.Evidence)
+			if err != nil {
+				return api.ModelResponse{}, err
+			}
+		} else if options.flowAgentRuns > 0 {
 			var err error
 			changes, err = flowFixtureChanges(definition, input.Agent, input.Request, input.Evidence)
 			if err != nil {

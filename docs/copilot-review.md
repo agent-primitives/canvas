@@ -13,6 +13,36 @@ not inherit the fixture's zero-model-call or local-replay claims.
 
 To draft a new definition without starting an engine, use the separate
 [authoring starter and offline validation guide](canvas-authoring.md).
+
+### Request a scoped document edit
+
+A local v1alpha3 definition with a compiled `editAgent` binding exposes the edit
+panel. Select an accepted document, inspect its exact revision/digest and full
+content, choose whole-document, JSON Pointer, or supported ATX heading scope,
+and supply an instruction. Edits are **document-only**: every nonempty flow-run
+association refuses, and no edit is admitted while any nonterminal flow is active.
+This creates a proposal, **not accepted bytes**.
+Review every replacement in the existing proposal review before Accept/Reject.
+A missing or invalid explicit selector refuses rather than becoming a whole edit.
+The deterministic Northwind fixture edits only the PRD title and does not
+interpret instructions or qualify live inference.
+
+The single durable slot fences competing manual/flow actions, reviews and
+Continue. An unsettled manual action on the same document refuses edit admission;
+editing never retires that handle. A lost reply retains the exact request or
+maintenance command for explicit continuation. Polling, opening and reopening do
+not retry, publish, accept or dispatch work. Reject/failure preserves accepted
+bytes; acceptance is a separate whole-proposal decision and invalidates old-base
+proposals, without starting or reopening a flow.
+
+Explicit Reconcile can recover recorded native/Git publication or review evidence.
+An abandoned edit may also use read-back-only reconciliation to prove its exact
+owned native END; this clears only admission bookkeeping, never publishes the
+abandoned output. Unknown or missing execution identity remains fenced. Local
+abandonment is not native cancellation. Flow-associated edits, Resume/Rerun,
+shared-budget integration and edit replay are future work, not controls in this
+panel. See [edit boundaries and recovery](flow-runtime.md#scoped-document-edit-proposals)
+for selector support, edit-only number guards, limits and incomplete-proof cases.
 Chat drafts reviewable file diffs; it does not activate, approve or continue.
 
 ## Start the engine

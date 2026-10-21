@@ -210,6 +210,9 @@ func (c *Canvas) ReconcileFlow(ctx context.Context, q FlowMaintenance) (FlowRun,
 	if e != nil {
 		return f, e
 	}
+	if err := c.editFence(); err != nil {
+		return f, err
+	}
 	who, e := c.authorizeFlowMaintenance(ctx, f, q.Role, "reconcile")
 	if e != nil {
 		return f, e

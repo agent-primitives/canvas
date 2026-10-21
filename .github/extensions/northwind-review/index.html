@@ -33,8 +33,26 @@
 <p id="flow-status" role="status" aria-live="polite"></p><p id="flow-location"></p><p id="flow-reason" class="hint"></p><p id="flow-record" class="hint"></p>
 <ol id="flow-steps" aria-label="Ordered workflow steps"></ol>
 <div class="actions"><button id="flow-retry" class="secondary" disabled>Retry failed step</button><button id="flow-reconcile" class="secondary" disabled>Reconcile</button><button id="flow-advance" disabled>Advance</button><button id="flow-cancel" class="secondary" disabled>Cancel flow</button></div>
-<p class="hint">Retries consume budget. Reconcile only inspects evidence; Advance dispatches separately. Cancellation preserves accepted history and may await native settlement. Editing is not available yet.</p>
+<p class="hint">Retries consume budget. Reconcile only inspects evidence; Advance dispatches separately. Cancellation preserves accepted history and may await native settlement. Document-only edits are unavailable while a flow is active.</p>
 <details><summary>Flow history and replay evidence</summary><h3>Selected run, frozen inputs and feedback</h3><pre id="flow-run-record" tabindex="0" aria-label="Selected flow run and attributed feedback"></pre><h3>Linked native attempts</h3><pre id="flow-attempts" tabindex="0" aria-label="Flow attempts and proposal references"></pre><button id="flow-verify" class="secondary" disabled>Verify flow replay</button><p id="flow-proof" role="status">Flow replay not verified.</p><pre id="flow-evidence" tabindex="0" aria-label="Aggregate flow reconstruction evidence"></pre></details>
+</section>
+<section id="edit-panel" aria-labelledby="edit-title" hidden>
+<h2 id="edit-title">Document-only edit proposal</h2>
+<p class="hint">A local prototype, unavailable while any flow is active. Request an instructed, scoped proposal for an accepted document; review the complete proposal separately before Accept or Reject. No flow is associated or reopened.</p>
+<label for="edit-document">Accepted document</label><select id="edit-document"></select>
+<label for="edit-instruction">Edit instruction (at most 2,000 bytes)</label><textarea id="edit-instruction" rows="3" maxlength="2000"></textarea>
+<label for="edit-kind">Scope</label><select id="edit-kind"><option value="whole">Whole document</option><option value="json-pointer">JSON Pointer</option><option value="markdown-heading">Markdown heading</option></select>
+<div id="edit-json-fields" hidden><label for="edit-pointer">Exact JSON Pointer (empty means root)</label><input id="edit-pointer" maxlength="512" placeholder="/title"></div>
+<div id="edit-markdown-fields" hidden><label for="edit-headings">Exact heading path, one heading per line</label><textarea id="edit-headings" rows="3"></textarea><label for="edit-occurrence">Occurrence (1-based)</label><input id="edit-occurrence" type="number" value="1" min="1" step="1"></div>
+<pre id="edit-scope" tabindex="0" aria-label="Requested scope preview"></pre>
+<details><summary>Complete accepted document and base evidence</summary><pre id="edit-base" tabindex="0"></pre><pre id="edit-accepted" tabindex="0" aria-label="Complete accepted document"></pre></details>
+<label><input id="edit-confirm" type="checkbox" disabled>I reviewed this accepted base, exact scope and instruction. Request one edit proposal.</label>
+<button id="edit-request" disabled>Request edit proposal</button><button id="edit-continue" hidden disabled>Continue exact edit request</button>
+<label for="edit-history">Edit history</label><select id="edit-history"><option value="">No edit selected</option></select>
+<p id="edit-status" role="status" aria-live="polite"></p><pre id="edit-resolved" tabindex="0" aria-label="Frozen resolved edit scope"></pre>
+<label><input id="edit-command-confirm" type="checkbox" disabled>I inspected this edit and current accepted head. Confirm only the recovery command I click.</label>
+<div class="actions"><button id="edit-reconcile" disabled>Reconcile edit</button><button id="edit-abandon" disabled>Abandon edit</button></div>
+<details><summary>Edit record</summary><pre id="edit-detail" tabindex="0" aria-label="Edit request and proposal record"></pre></details>
 </section>
 <div id="empty"><h2>Start with a document draft</h2><p>New writer draft creates a fictional PRD and announcement for you to review as one proposal. Accepting documents does not approve or run an action.</p></div>
 <div id="review" hidden>

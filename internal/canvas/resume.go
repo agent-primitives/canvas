@@ -168,7 +168,7 @@ func hashIdentity(hash string) bool {
 
 func (c *Canvas) resumeTargetLocked(run, message string) (attempt, string, bool) {
 	a := c.findLocked(run)
-	if a == nil || a.Session == "" {
+	if a == nil || a.Session == "" || a.EditID != "" || c.data.EditSlot != "" {
 		return attempt{}, "", false
 	}
 	target := *a
@@ -325,7 +325,7 @@ func (c *Canvas) ConfirmResume(ctx context.Context, run, message, role string, c
 func (c *Canvas) claimResume(run, message, role string, inspection ResumeInspection, confirmation ResumeConfirmation) (resumeAction, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.activeFlowLocked() || c.ctx.Err() != nil || c.questionVersionLocked(inspection.Session) != inspection.SessionVersion || c.questionBusyLocked(inspection.Session) {
+	if c.data.EditSlot != "" || c.activeFlowLocked() || c.ctx.Err() != nil || c.questionVersionLocked(inspection.Session) != inspection.SessionVersion || c.questionBusyLocked(inspection.Session) {
 		return resumeAction{}, errResumeConflict
 	}
 	for _, previous := range c.data.Recoveries {
