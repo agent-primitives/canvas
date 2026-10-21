@@ -103,14 +103,16 @@ func BindDraft(definition, destination, agent string, suite contract.SuiteRef) (
 		return nil, ErrBinding
 	}
 	defer os.RemoveAll(staging)
-	if writePackageTree(staging, files) != nil {
+	// Keep the private outer directory intact while normalizing portable modes.
+	tree := filepath.Join(staging, "files")
+	if writePackageTree(tree, files) != nil {
 		return nil, ErrBinding
 	}
-	if _, _, err := compilePackage(staging, filepath.Base(filename)); err != nil {
+	if _, _, err := compilePackage(tree, filepath.Base(filename)); err != nil {
 		return nil, ErrBinding
 	}
 	// Reuse Init's exclusive reservation and inode-checked publication cleanup.
-	if publish(os.DirFS(staging), absolute) != nil {
+	if publish(os.DirFS(tree), absolute) != nil {
 		return nil, ErrBinding
 	}
 	paths := make([]string, 0, len(files))

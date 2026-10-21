@@ -431,6 +431,47 @@ func TestPackageLoadRejectsForgedClosure(t *testing.T) {
 	}
 }
 
+// Empty directories consume traversal work even though they are not published.
+func TestPackageBoundsEmptyDirectoryTraversal(t *testing.T) {
+	for _, operation := range []string{"prepare", "bind"} {
+		t.Run(operation, func(t *testing.T) {
+			root := packageFixture(t, "northwind-released")
+			layout := "layouts/writer"
+			if operation == "bind" {
+				bindingAssets(t, root)
+				layout = "supplied/reviewer"
+			}
+			for i := 0; i <= 4*maxPackageFiles; i++ {
+				if err := os.Mkdir(filepath.Join(root, layout, fmt.Sprintf("empty-%04d", i)), 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before := bindingTree(t, root)
+			if operation == "prepare" {
+				store := packageStore(t)
+				if _, err := store.Prepare(root, "canvas.yaml"); !errors.Is(err, ErrPackage) {
+					t.Fatalf("unbounded directory capture accepted: %v", err)
+				}
+				entries, err := os.ReadDir(store.privateRoot)
+				if err != nil || len(entries) != 0 {
+					t.Fatalf("refused capture published files: %v %v", entries, err)
+				}
+			} else {
+				out := filepath.Join(t.TempDir(), "bound")
+				if _, err := BindDraft(filepath.Join(root, "canvas.yaml"), out, "writer", bindingSuite()); !errors.Is(err, ErrBinding) {
+					t.Fatalf("unbounded directory binding accepted: %v", err)
+				}
+				if _, err := os.Lstat(out); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("refused binding reserved output: %v", err)
+				}
+			}
+			if !reflect.DeepEqual(before, bindingTree(t, root)) {
+				t.Fatal("refused traversal changed source bytes")
+			}
+		})
+	}
+}
+
 func TestPackageRefusesDisjointAndUnsafeReads(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "draft")
 	if _, err := Init(sourceCheckout(t), root, "single-review", "frozen"); err != nil {

@@ -111,6 +111,9 @@ unchanged. A changed binding drops that slot's old evaluation association; it do
 not fabricate replacement evidence. Missing assets, a wrong pin/member/platform,
 unknown slot, unsupported profile or existing output refuse. Execution still needs
 an explicitly supported provider; offline validity is not model qualification.
+Capture is limited to 1,024 files, 4,096 visited entries (including directories),
+8 MiB per file and 32 MiB total. Directory enumeration is incremental; empty
+or repeated directories still consume the traversal budget.
 
 ## Compile declared flows (v1alpha3)
 

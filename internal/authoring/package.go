@@ -22,6 +22,7 @@ import (
 var ErrPackage = errors.New("invalid, unsafe or incomplete frozen package")
 
 const maxPackageFiles = 1024
+const maxPackageEntries = 4 * maxPackageFiles
 const maxPackageFile = 8 << 20
 const maxPackageBytes = 32 << 20
 
@@ -173,6 +174,54 @@ func uniqueYAML(node *yaml.Node) bool {
 	return true
 }
 
+// Read directory entries incrementally: WalkDir reads and sorts an entire
+// directory before its visitor can reject an oversized or undeclared tree.
+func walkPackage(root *os.Root, name string, visit func(string, fs.FileInfo) error) error {
+	visited := 0
+	var walk func(string) error
+	walk = func(name string) error {
+		visited++
+		// Retained trees add '.', 'files' and 'manifest.json' to the closure.
+		if visited > maxPackageEntries+3 {
+			return ErrPackage
+		}
+		info, err := root.Lstat(name)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+			return ErrPackage
+		}
+		if err := visit(name, info); err != nil {
+			return err
+		}
+		if !info.IsDir() {
+			return nil
+		}
+		directory, err := root.Open(name)
+		if err != nil {
+			return ErrPackage
+		}
+		defer directory.Close()
+		opened, err := directory.Stat()
+		if err != nil || !opened.IsDir() || !os.SameFile(info, opened) {
+			return ErrPackage
+		}
+		for {
+			entries, readErr := directory.ReadDir(1)
+			for _, entry := range entries {
+				if err := walk(path.Join(name, entry.Name())); err != nil {
+					return err
+				}
+			}
+			if readErr == io.EOF {
+				return nil
+			}
+			if readErr != nil || len(entries) == 0 {
+				return ErrPackage
+			}
+		}
+	}
+	return walk(name)
+}
+
 // Discover only declared filesystem dependencies. The actual compiler remains
 // authoritative for syntax, schemas, pins, profiles and the complete definition.
 func capturePackage(rootPath, definition string, replacement []byte) (map[string][]byte, error) {
@@ -211,14 +260,15 @@ func capturePackage(rootPath, definition string, replacement []byte) (map[string
 	}
 	files := map[string][]byte{}
 	seen := map[string]string{}
-	total := 0
+	total, visited := 0, 0
 	register := func(name string) error {
 		if !packagePath(name) {
 			return ErrPackage
 		}
 		for current := name; current != "."; current = path.Dir(current) {
 			folded := strings.ToLower(current)
-			if previous, ok := seen[folded]; ok && previous != current {
+			previous, exists := seen[folded]
+			if exists && previous != current || !exists && len(seen) >= maxPackageEntries {
 				return ErrPackage
 			}
 			seen[folded] = current
@@ -258,12 +308,9 @@ func capturePackage(rootPath, definition string, replacement []byte) (map[string
 				return ErrPackage
 			}
 		}
-		return fs.WalkDir(root.FS(), name, func(file string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil || register(file) != nil {
-				return ErrPackage
-			}
-			info, e := root.Lstat(file)
-			if e != nil {
+		return walkPackage(root, name, func(file string, info fs.FileInfo) error {
+			visited++
+			if visited > maxPackageEntries || register(file) != nil {
 				return ErrPackage
 			}
 			if info.IsDir() {
@@ -504,15 +551,9 @@ func (s *Packages) verified(id string) (Package, map[string][]byte, error) {
 	if _, ok := files[p.Definition]; !ok {
 		return Package{}, nil, ErrPackage
 	}
-	if fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, e error) error {
-		if e != nil || !allowed[name] || entry.Type()&os.ModeSymlink != 0 {
+	if walkPackage(root, ".", func(name string, info fs.FileInfo) error {
+		if !allowed[name] || name != "." && info.IsDir() && info.Mode().Perm() != 0755 {
 			return ErrPackage
-		}
-		if name != "." && entry.IsDir() {
-			info, e := root.Stat(name)
-			if e != nil || info.Mode().Perm() != 0755 {
-				return ErrPackage
-			}
 		}
 		return nil
 	}) != nil {
