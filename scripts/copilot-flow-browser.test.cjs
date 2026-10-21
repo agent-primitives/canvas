@@ -79,6 +79,84 @@ async function acceptGate(p, step) {
   await p.frame.locator('#accept:not(:disabled)').click();
 }
 
+test('document-only edit iframe keeps exact lost request, reviews a scoped native proposal and accepts separately', async t => {
+  let lost = false;
+  const p = await flowPanel(t, undefined, false, async (page, bridge) => {
+    await page.route(bridge.origin + '/api/edit/request', async route => {
+      if (!lost) { lost = true; await route.fetch(); await route.abort('failed'); }
+      else await route.continue();
+    });
+  });
+  await p.ready();
+  const before = await p.api('/api/state');
+  const accepted = await p.api('/api/edit/context?document=prd');
+  assert.equal((await p.api('/api/flows')).runs.length, 0);
+  assert.equal((await p.api('/api/demo')).providerCalls, 0);
+  assert.equal(await p.frame.locator('#edit-resume, #edit-rerun').count(), 0);
+  await p.frame.locator('#edit-panel').waitFor({ state: 'visible' });
+  await p.frame.locator('#edit-kind').selectOption('json-pointer');
+  await p.frame.locator('#edit-pointer').fill('/title');
+  await p.frame.locator('#edit-instruction').fill('Revise the title of this fictional PRD.');
+  await p.frame.locator('#edit-confirm:not(:disabled)').check();
+  await p.frame.locator('#edit-request:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Exact request retained' }).waitFor();
+  assert.equal((await p.api('/api/state')).head, before.head, 'request never accepts bytes');
+  // The lost admission reply can precede completion of its producer. Wait on
+  // read-only evidence first: a queued→proposal poll deliberately revokes a
+  // click bound to the older evidence, and must not be mistaken for a retry.
+  await p.frame.getByText('Edit record', { exact: true }).click();
+  await p.frame.locator('#edit-detail').filter({ hasText: '"state": "proposal"' }).waitFor();
+  await p.ready(); await p.frame.locator('#edit-continue:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Edit: proposal' }).waitFor(); await p.ready();
+  const requests = p.posts.filter(post => post.path === '/api/edit/request');
+  assert.equal(requests.length, 2); assert.deepEqual(requests[0].body, requests[1].body, 'lost reply continuation retains exact key/payload');
+  assert.equal(Object.hasOwn(requests[0].body, 'flowRun'), false);
+  assert.equal(requests[0].body.instruction, 'Revise the title of this fictional PRD.');
+  assert.deepEqual(requests[0].body.section, { kind: 'json-pointer', pointer: '/title' });
+  assert.equal((await p.api('/api/demo')).providerCalls, 1, 'one native edit producer, not a repeated edit');
+  const proposed = await p.api('/api/state');
+  assert.equal(proposed.head, before.head);
+  assert.equal(proposed.proposals.length, before.proposals.length + 1);
+  assert.deepEqual(Object.keys(proposed.proposals[0].changes), ['prd.json']);
+  const review = await p.api('/api/document?path=prd.json&proposal=' + proposed.proposals[0].id);
+  const expected = JSON.parse(accepted.content); expected.title += ' — scoped fixture edit';
+  assert.deepEqual(JSON.parse(review.proposed), expected, 'complete proposal changes only the selected title');
+  assert.match(await p.frame.locator('#scope').textContent(), /Whole-proposal scope: prd.json/);
+  assert.equal(await p.frame.locator('#documents > details').count(), 1);
+  assert.equal(await p.frame.locator('#document-confirm').isChecked(), false);
+  assert.equal(await p.frame.locator('#flow-open').isDisabled(), true, 'the edit slot fences competing flow admission');
+  await p.frame.locator('#document-confirm:not(:disabled)').check();
+  await p.frame.locator('#accept:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Edit: accepted' }).waitFor(); await p.ready();
+  assert.notEqual((await p.api('/api/state')).head, before.head, 'only human acceptance changes accepted bytes');
+  assert.deepEqual(JSON.parse((await p.api('/api/edit/context?document=prd')).content), expected);
+  assert.equal((await p.api('/api/flows')).runs.length, 0, 'document editing never starts or reopens a flow');
+  assert.equal(p.posts.filter(post => post.path.startsWith('/api/flow/')).length, 0);
+  assert.equal(p.posts.filter(post => post.path === '/api/review').length, 1);
+  assert.equal((await p.api('/api/demo')).providerCalls, 1);
+  assert.deepEqual(p.errors, []);
+});
+
+test('document-only edit iframe refuses native scope escape without changing accepted Git state or starting a flow', async t => {
+  const p = await flowPanel(t); await p.ready();
+  const before = await p.api('/api/state');
+  const accepted = await p.api('/api/edit/context?document=prd');
+  await p.frame.locator('#edit-kind').selectOption('json-pointer');
+  await p.frame.locator('#edit-pointer').fill('/problem');
+  await p.frame.locator('#edit-instruction').fill('Change only the selected problem.');
+  await p.frame.locator('#edit-confirm:not(:disabled)').check();
+  await p.frame.locator('#edit-request:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Edit: failed' }).waitFor(); await p.ready();
+  assert.equal((await p.api('/api/state')).head, before.head, 'fixture title output outside problem scope is refused');
+  assert.equal((await p.api('/api/edit/context?document=prd')).content, accepted.content);
+  assert.equal((await p.api('/api/state')).proposals.length, before.proposals.length, 'out-of-scope native output is not published');
+  const edits = await p.api('/api/edits'); assert.equal(edits.edits.length, 1); assert.equal(edits.edits[0].state, 'failed'); assert.equal(edits.slot, '');
+  assert.equal((await p.api('/api/flows')).runs.length, 0);
+  assert.equal((await p.api('/api/demo')).providerCalls, 1, 'one native attempt; failed scope validation does not retry');
+  assert.equal(p.posts.filter(post => post.path.startsWith('/api/flow/')).length, 0);
+  assert.deepEqual(p.errors, []);
+});
+
 test('initial metadata failure stays offline and manual inspection restores normal polling', async t => {
   const p = await flowPanel(t, undefined, false, async (page, bridge) => {
     let first = true;

@@ -142,9 +142,15 @@ func (c *Canvas) snapshotGeneric(agent, request, role string) (attempt, error) {
 	return c.snapshotRequest(agent, request, role, 2000)
 }
 func (c *Canvas) snapshotRequest(agent, request, role string, requestLimit int) (attempt, error) {
+	declared, ok := c.definition.Agents[agent]
+	if !ok {
+		return attempt{}, errors.New("invalid declared agent")
+	}
+	return c.snapshotAgentRequest(agent, request, role, requestLimit, declared)
+}
+func (c *Canvas) snapshotAgentRequest(agent, request, role string, requestLimit int, declared AgentDefinition) (attempt, error) {
 	d := c.definition
-	declared, ok := d.Agents[agent]
-	if !ok || (!validRole(role) && role != fileActor) || strings.TrimSpace(request) == "" || !utf8.ValidString(request) || !safeText(request, requestLimit) {
+	if (!validRole(role) && role != fileActor) || strings.TrimSpace(request) == "" || !utf8.ValidString(request) || !safeText(request, requestLimit) {
 		return attempt{}, errors.New("invalid declared agent, actor or request")
 	}
 	base, err := c.space.Head()

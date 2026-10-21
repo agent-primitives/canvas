@@ -30,12 +30,24 @@ test('thin adapter keeps engine cookie private and forwards only reviewed routes
   response = await fetch(bridge.origin + '/api/role', { method: 'POST', headers, body: '{"role":"owner"}' }); assert.equal(response.status, 404);
   response = await fetch(bridge.origin + '/api/announcement/decision', { method: 'POST', headers, body: '{"approved":false}' }); assert.equal(response.status, 200);
   assert.deepEqual(observed, [['GET', '/api/state'], ['POST', '/api/announcement/decision']]);
-  for (const route of ['/api/flows', '/api/flow?run=known']) {
+  for (const route of ['/api/edits', '/api/edit?id=known', '/api/edit/context?document=prd', '/api/flows', '/api/flow?run=known']) {
     response = await fetch(bridge.origin + route, { headers }); assert.equal(response.status, 200);
   }
   for (const name of ['start', 'changes', 'retry', 'cancel', 'reconcile', 'advance', 'verify']) {
     response = await fetch(bridge.origin + '/api/flow/' + name, { method: 'POST', headers, body: '{}' }); assert.equal(response.status, 200);
   }
+  for (const name of ['request', 'reconcile', 'abandon']) {
+    response = await fetch(bridge.origin + '/api/edit/' + name, { method: 'POST', headers, body: '{}' }); assert.equal(response.status, 200);
+  }
+  for (const name of ['resume', 'rerun']) {
+    const count = observed.length;
+    response = await fetch(bridge.origin + '/api/edit/' + name, { method: 'POST', headers, body: '{}' }); assert.equal(response.status, 404);
+    assert.equal(observed.length, count, 'unsupported edit commands never reach the engine');
+  }
+  response = await fetch(bridge.origin + '/api/edit/context?document=prd&flowRun=known', { headers }); assert.equal(response.status, 400);
+  response = await fetch(bridge.origin + '/api/edit/context?document=prd&path=secret', { headers }); assert.equal(response.status, 400);
+  response = await fetch(bridge.origin + '/api/edit?id=a&id=b', { headers }); assert.equal(response.status, 400);
+  response = await fetch(bridge.origin + '/api/edit/request', { method: 'POST', headers, body: 'x'.repeat(8193) }); assert.equal(response.status, 413);
   response = await fetch(bridge.origin + '/api/flow/unknown', { method: 'POST', headers, body: '{}' }); assert.equal(response.status, 404);
   const largeStart = JSON.stringify({ flow: 'release', requestKey: 'bounded', role: 'GM', inputs: { topic: 'x'.repeat(20000) }, agentRuns: 12 });
   response = await fetch(bridge.origin + '/api/flow/start', { method: 'POST', headers, body: largeStart }); assert.equal(response.status, 200, 'Start needs more than the old decision envelope');

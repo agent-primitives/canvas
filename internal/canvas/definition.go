@@ -74,6 +74,7 @@ type CompiledDefinition struct {
 	Actions        map[string]ActionDefinition
 	actions        map[string]ActionDefinition
 	documents      map[string]compiledDocument
+	editReadScopes map[string][]string
 	proposals      map[string]map[string]bool
 }
 type compiledDocument struct {
@@ -368,6 +369,10 @@ func loadGenericDefinition(filename string, resolver *contract.ReleaseResolver, 
 				seen[docID] = true
 			}
 		}
+		if d.editReadScopes == nil {
+			d.editReadScopes = map[string][]string{}
+		}
+		d.editReadScopes[id] = slices.Clone(agent.Read)
 		d.proposals[id] = map[string]bool{}
 		for _, docID := range agent.Propose {
 			if d.documents[docID].input {

@@ -115,7 +115,7 @@ func (c *Canvas) activeFlowLocked() bool {
 
 // flowAdmissionBusyLocked shares the reservation mutex with all native work.
 func (c *Canvas) flowAdmissionBusyLocked() bool {
-	if c.activeFlowLocked() || c.flowEffectBusyLocked("") || c.ctx.Err() != nil {
+	if c.data.EditSlot != "" || c.activeFlowLocked() || c.flowEffectBusyLocked("") || c.ctx.Err() != nil {
 		return true
 	}
 	for _, a := range c.data.Attempts {
@@ -138,7 +138,7 @@ func (c *Canvas) flowAdmissionBusyLocked() bool {
 func (c *Canvas) competingFlow() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.activeFlowLocked() || c.flowEffectBusyLocked("") {
+	if c.data.EditSlot != "" || c.activeFlowLocked() || c.flowEffectBusyLocked("") {
 		return ErrFlowBusy
 	}
 	return nil
@@ -472,6 +472,12 @@ func (c *Canvas) beginFlowDecision(id, proposal, action string, who sharedspace.
 	return nil
 }
 func (c *Canvas) reviewFlowLocked(ctx context.Context, id, action, role string, change *FlowChanges) (sharedspace.Proposal, error) {
+	if handled, p, err := c.reviewEditLocked(ctx, id, action, role); handled {
+		return p, err
+	}
+	if err := c.editFence(); err != nil {
+		return sharedspace.Proposal{}, err
+	}
 	fid, err := c.flowReviewGuard(id, role)
 	if err != nil {
 		return sharedspace.Proposal{}, err
@@ -745,6 +751,9 @@ func (c *Canvas) parkFlowActionLocked(ctx context.Context, id, action string, tr
 	return err
 }
 func (c *Canvas) flowActionAllowedLocked(op announcementOperation) bool {
+	if c.data.EditSlot != "" || op.Revoked {
+		return false
+	}
 	if op.FlowRun == "" {
 		return !c.activeFlowLocked()
 	}

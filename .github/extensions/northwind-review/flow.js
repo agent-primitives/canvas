@@ -185,6 +185,8 @@ export function createFlowPanel({ api, action, selectionChanged, requesterRole }
     $('flow-evidence').textContent = JSON.stringify(proof, null, 2);
   });
   return { update, inspect, controls, renderStatus, key, current, gateRole,
+    // Admission must inspect all runs, not just the selected history entry.
+    activeFlow: () => snapshot?.runs.find(run => !terminal(run.state)),
     proposals: () => {
       // The flow binding can be published before the public attempt association.
       const run = current();

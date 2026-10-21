@@ -20,7 +20,7 @@ var ErrQuestionsUnsupported = errors.New("questions are unsupported for this rec
 var ErrQuestionBusy = errors.New("wait for the current session turn before asking another question")
 
 func questionBinding(a *attempt) bool {
-	return a.Session != "" && a.BundleDigest != "" && (a.Harness == contract.HarnessName(a.BundleDigest, 3) || a.Mode == "documents" && a.Harness == contract.HarnessName(a.BundleDigest, 4))
+	return a.EditID == "" && a.Session != "" && a.BundleDigest != "" && (a.Harness == contract.HarnessName(a.BundleDigest, 3) || a.Mode == "documents" && a.Harness == contract.HarnessName(a.BundleDigest, 4))
 }
 func (c *Canvas) questionBusyLocked(session string) bool {
 	return c.turnBusyLocked(session) || c.recoveryBusyLocked(session, "")

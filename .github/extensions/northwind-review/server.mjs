@@ -6,12 +6,12 @@ import { open, readFile } from 'node:fs/promises';
 import { constants } from 'node:fs';
 
 const routes = {
-  GET: new Set(['/api/state', '/api/document', '/api/announcement', '/api/demo', '/api/forks', '/api/flows', '/api/flow']),
-  POST: new Set(['/api/run', '/api/review', '/api/verify', '/api/announcement/request', '/api/announcement/decision', '/api/announcement/continue', '/api/announcement/verify', '/api/flow/start', '/api/flow/changes', '/api/flow/retry', '/api/flow/cancel', '/api/flow/reconcile', '/api/flow/advance', '/api/flow/verify']),
+  GET: new Set(['/api/state', '/api/document', '/api/announcement', '/api/demo', '/api/forks', '/api/flows', '/api/flow', '/api/edits', '/api/edit', '/api/edit/context']),
+  POST: new Set(['/api/run', '/api/review', '/api/verify', '/api/announcement/request', '/api/announcement/decision', '/api/announcement/continue', '/api/announcement/verify', '/api/flow/start', '/api/flow/changes', '/api/flow/retry', '/api/flow/cancel', '/api/flow/reconcile', '/api/flow/advance', '/api/flow/verify', '/api/edit/request', '/api/edit/reconcile', '/api/edit/abandon']),
 };
 const authoringReads = new Set(['/api/authoring', '/api/authoring/candidate', '/api/authoring/file', '/api/authoring/instance']);
 const authoringWrites = new Set(['/api/authoring/prepare', '/api/authoring/activate']);
-const assets = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/flow.js': ['flow.js', 'text/javascript'], '/activation.js': ['activation.js', 'text/javascript'] };
+const assets = { '/': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/style.css': ['style.css', 'text/css'], '/flow.js': ['flow.js', 'text/javascript'], '/activation.js': ['activation.js', 'text/javascript'], '/edit.js': ['edit.js', 'text/javascript'] };
 const security = {
   'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer', 'X-Content-Type-Options': 'nosniff',
   'Content-Security-Policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'",
@@ -119,11 +119,22 @@ export async function startBridge(options = {}) {
     const authoringRead = initialDemo.authoring && req.method === 'GET' && authoringReads.has(url.pathname);
     const authoringWrite = initialDemo.authoring && req.method === 'POST' && authoringWrites.has(url.pathname);
     if (!routes[req.method]?.has(url.pathname) && !authoringRead && !authoringWrite) return reply(res, 404, { error: 'Unsupported review route' });
+    const editRoute = url.pathname === '/api/edits' || url.pathname.startsWith('/api/edit');
+    if (editRoute) {
+      if (['authenticated-sessions', 'trusted-loopback-sessions', 'hosted-sessions'].includes(initialDemo.mode) || (initialDemo.mode === 'inert-authoring' && !instance)) return reply(res, 404, { error: 'Local edit prototype unavailable' });
+      const allowed = req.method === 'GET' ? ({ '/api/edits': [], '/api/edit': ['id'], '/api/edit/context': ['document'] }[url.pathname] || []) : [];
+      const seen = new Set(), query = new URLSearchParams();
+      for (const [key, value] of url.searchParams) {
+        if (!allowed.includes(key) || seen.has(key)) return reply(res, 400, { error: 'Unsupported edit query' });
+        seen.add(key); query.set(key, value);
+      }
+      url.search = query.toString();
+    }
     let body;
     if (req.method === 'POST') {
       if (req.headers['content-type'] !== 'application/json') return reply(res, 415, { error: 'JSON required' });
       const parts = []; let size = 0;
-      const limit = authoringWrite ? 4096 : url.pathname === '/api/flow/start' ? 72 * 1024 : 16384;
+      const limit = authoringWrite ? 4096 : editRoute ? 8192 : url.pathname === '/api/flow/start' ? 72 * 1024 : 16384;
       for await (const chunk of req) { size += chunk.length; if (size > limit) return reply(res, 413, { error: 'Action too large' }); parts.push(chunk); }
       body = Buffer.concat(parts);
     }
