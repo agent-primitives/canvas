@@ -114,6 +114,121 @@ private file modes to make a mount work. The image contains the binary, not your
 scenario or credentials. Image/cluster lifecycle qualification is separate from
 the command's fake-harnesswire tests.
 
+## Opt-in simulated announcement transport
+
+**Auth-off/private simulation only. Hosted operation is incomplete until
+host-authoritative dispatch bindings are available; this is not the signed-in milestone.** Nothing
+is sent or published. The hosted engine/panel still refuses announcement actions;
+these commands provide transport infrastructure, not an enabled hosted workflow.
+
+To append the deterministic announcement producer, prepare a new directory with
+`-simulated-announcement`:
+
+```sh
+go run ./cmd/canvas-harness prepare \
+  -definition examples/release-review/canvas.yaml \
+  -out .state/native-simulated-producers \
+  -simulated-announcement
+```
+
+This emits a closed version-2 inventory. Bundle entries have exactly `kind`,
+`bundle` and `address`; the announcement entry has exactly `kind` and `address`:
+
+```json
+{"version":2,"entries":[{"kind":"bundle","bundle":"contracts/<64-lowercase-hex-digest>/agent.yaml","address":"127.0.0.1:9000"},{"kind":"simulated-announcement","address":"127.0.0.1:9001"}]}
+```
+
+The example illustrates the schema, not the actual role count or a runnable
+archive. Read the emitted inventory: the single announcement is last, after all
+bundles, with a unique port. Its descriptor is exactly
+`canvas.simulated-announcement.v1`, version `1`; its approval-required tool is
+`canvas.simulated-announcement`. Inventory version 2 does not change those
+identities. The entire inventory (at most 32 total entries) is validated before
+any listener opens. Serve accepts versions 1 and 2. Without the preparation flag,
+version-1 output and existing producer behavior are unchanged.
+
+The announcement harness is model-free. **Producer `serve` never opens an
+executor store.** Run the separate executor process on the host side of the
+private Unix socket, not in the document-producer process/pod:
+
+```sh
+mkdir -m 700 .state/simulated-sockets
+go run ./cmd/canvas-harness executor \
+  -socket "$(pwd)/.state/simulated-sockets/announcement.sock" \
+  -state "$(pwd)/.state/simulated-executor" \
+  -auth-mode off -trusted-network=true
+```
+
+Both opt-ins are mandatory. Missing/required/other auth modes refuse before
+creating state or a socket. The executor cannot infer a remote host's auth mode:
+matching that mode is an operator obligation, not authentication. Before a host
+assembly enables this profile, its runtime must independently refuse the actual
+announcement descriptor/tool in required mode, even with renamed registrations.
+That host assembly is separate work; chart validation alone is insufficient.
+
+The socket path must be absolute, clean and at most 103 bytes; its existing
+parent directory must be nonsymlink, owned by the process user and mode 0700.
+The executor creates a 0600 socket, refuses every existing path, and **never
+unlinks it**, including on clean shutdown. Before restart, verify the old writer
+is stopped and remove its stale socket explicitly, or provide a new private
+socket path. Do not remove a live socket to bypass the store lease. Unsafe
+permissions are refused, not repaired. The retained state path must be absolute
+and separate from the socket directory; the existing durable executor opens a
+new private subtree or its exact compatible store without resetting history.
+
+The existing `producer` image target contains this subcommand. In a future
+assembly, run it as a separate nonroot host-pod sidecar, mounting only its prepared
+retained executor subtree and the host/executor private socket directory. Do not
+mount the host journal/model ledger or inject model credentials/workload tokens.
+Keep the ledger in the stopped-writer coordinated recovery set alongside engine
+and host state. Unix sockets do not cross pod boundaries. Pod NetworkPolicy is
+shared by containers: this placement does not prove per-container no-egress
+isolation. This document does not change the existing chart or install procedure.
+
+### Unix protocol and failure semantics
+
+The announcement-only adapter accepts the existing host executor protocol: one
+UTF-8 newline-terminated JSON request per connection, at most 1 MiB including the
+newline. Exact required fields are `version` (integer 1), `harness` (the exact
+announcement descriptor), `session_uid` (nonempty, at most 4096 bytes), `call_id`,
+`tool`, `arguments`, and `idempotency_key`. Arguments strictly decode as the
+announcement snapshot schema in any key order; call ID and idempotency key must
+both equal its operation. Unknown/duplicate/case-folded/null/invalid fields,
+wrong routes, oversized or incomplete frames close the connection without
+admitting an executor invocation. The adapter supplies fixed approval-required
+mediation only for that exact route; it is not an independent approval check.
+
+A response has `version:1`, the same `call_id`, and `is_error`, with optional
+`output` or sanitized `error`. Successful output is the unchanged
+`SIMULATED_ANNOUNCEMENT` receipt from the shared durable executor. Explicit
+matching transport duplicates increase invocation count but return one matching
+outcome; changed snapshot content conflicts. No automatic retry occurs.
+
+There are at most 16 active connections and a five-second context/I/O bound per
+connection; overload closes the extra connection. That bound may end between
+admission and outcome commits. Shutdown cancels peers, drains workers, then
+closes the store and releases its one-writer lease. A detected uncertain store
+stops the server with an error rather than consuming further approvals.
+
+**A failed/lost socket reply does not prove no receipt.** Native Sessions may
+record a terminal `EXECUTOR_ERROR` while the executor ledger already contains a
+receipt. Only host-run cancellation leaves an approved native call unanswered;
+an ordinary transport error is not automatically a recoverable pending approval.
+Operators must reconcile both ledgers before new work; restarting alone does not
+repair their disagreement or authorize native retry. Explicit transport duplicate
+tests are not reconstruction replay or evidence of exactly-once external effects.
+
+Anyone who can access the socket can fabricate a simulated-receipt request; a
+receipt alone never proves human approval. Approval and explicit Continue are
+separate in Canvas-mediated execution, but direct Sessions Resume lacks the
+additional authoritative Continue/resource/current-generation bindings. The host
+must supply those before complete hosted/signed-in execution. Later hosted enablement
+must also reject superseded snapshots on decision/Continue and preserve current
+revocation/generation/unknown-outcome fences without changing standalone local
+older-snapshot semantics. No hosted action route is enabled here. Remote replay
+Diagnostics remains disabled, counters remain unknown, and missing evidence is
+incomplete—not a zero/zero success.
+
 ## Standalone hosted TLS engine
 
 For a separate non-root, headless TLS engine connected to an existing private
@@ -152,8 +267,9 @@ For authentication use the independent [TLS/token-source path](authenticated-ses
 It still requires trusted CA/hostname verification and per-action identity; the
 trusted option cannot weaken or fall back from it.
 
-This command delivers the document-producer transport. It does not qualify the
-remote simulated-announcement executor, copied-session operator replay, host
-multi-endpoint chart wiring, kind lifecycle, a live model or AKS. Those require
-separate implementation and measured model/executor evidence. Do not infer them
-from readiness, inventory parsing, a proposal or fake-provider tests.
+The connection command delivers document-producer transport. The separate Unix
+simulation tests exercise the typed executor protocol and durable receipts, not
+complete hosted wiring, authoritative dispatch, copied-session operator replay,
+kind lifecycle, a live model or AKS. Those require separate implementation and
+measured model/executor evidence. Do not infer them from readiness, inventory
+parsing, a proposal or fake-provider tests.
