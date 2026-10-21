@@ -8,12 +8,12 @@ authentication interceptors and guarded Resume:
 - Substrate integration: `v0.0.0-20261019224537-f18a2cb1454d`
 - Resolved Substrate: `v0.4.1-0.20261013053953-96dffb287919`, upgraded from
   `fc0e3586a6de` through the integration's module requirement.
-- Go floor: 1.27.0 (required by the integration); selected toolchain: 1.27.2.
+- Go floor: 1.27.0 (required by the integration); selected toolchain: 1.27.3.
 
 These are ordinary Go module requirements, without fork or workspace replacements. Use
 `GOWORK=off make build` and `GOWORK=off make test` to verify the shipped modules.
 The Docker build-stage digest is the registry-verified multi-platform index for
-`golang:1.27.2-alpine`; the app runtime image remains separately pinned.
+`golang:1.27.3-alpine`; the app runtime image remains separately pinned.
 
 ## Journal upgrade and backup
 
