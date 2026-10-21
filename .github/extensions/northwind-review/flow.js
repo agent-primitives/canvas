@@ -86,7 +86,7 @@ export function createFlowPanel({ api, action, selectionChanged, requesterRole }
     $('flow-status').textContent = status;
     $('flow-location').textContent = run ? `Step ${Math.min(run.position + 1, definition().definition.steps.length)}: ${run.step}. Attempts ${run.attempts} / ${run.agentRuns}.` : 'No step is running.';
     $('flow-reason').textContent = run?.reason || '';
-    $('flow-record').textContent = run ? `Run ${run.id}; requester role ${run.role} (unverified local attribution); starting revision ${run.startBase}.` : 'Operator-loaded definition. Draft activation and editing are not available in this panel.';
+    $('flow-record').textContent = run ? `Run ${run.id}; requester role ${run.role} (unverified local attribution); starting revision ${run.startBase}.` : 'Operator-loaded definition. Document editing requires a compiled editor binding and a separate proposal review.';
     const listKey = JSON.stringify([definition() || formDefinition(), run?.position, run?.state, state.agents]);
     if ($('flow-steps').dataset.key !== listKey) {
       renderSteps('flow-steps', definition() || formDefinition(), run);
@@ -146,7 +146,7 @@ export function createFlowPanel({ api, action, selectionChanged, requesterRole }
     $('flow-feedback').disabled = !enabled || !gate || run?.state !== 'review';
     $('flow-changes').disabled = !ready || !gate || run?.state !== 'review' || !confirmed || !$('flow-feedback').value.trim();
     $('flow-retry').disabled = !ready || run?.state !== 'paused';
-    $('flow-cancel').disabled = !ready || !['starting', 'running', 'review', 'paused', 'uncertain', 'ready'].includes(run?.state);
+    $('flow-cancel').disabled = !ready || !['starting', 'running', 'review', 'paused', 'uncertain', 'ready', 'editing', 'edited', 'edit-paused'].includes(run?.state);
     $('flow-reconcile').disabled = !ready || !['uncertain', 'cancelling', 'action', 'approved-not-executed', 'denied'].includes(run?.state);
     $('flow-advance').disabled = !ready || run?.state !== 'ready';
     $('flow-verify').disabled = !ready || !run;
@@ -185,8 +185,6 @@ export function createFlowPanel({ api, action, selectionChanged, requesterRole }
     $('flow-evidence').textContent = JSON.stringify(proof, null, 2);
   });
   return { update, inspect, controls, renderStatus, key, current, gateRole,
-    // Admission must inspect all runs, not just the selected history entry.
-    activeFlow: () => snapshot?.runs.find(run => !terminal(run.state)),
     proposals: () => {
       // The flow binding can be published before the public attempt association.
       const run = current();

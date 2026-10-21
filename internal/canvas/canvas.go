@@ -685,13 +685,24 @@ func (c *Canvas) publishRunOutput(a attempt, turn *client.TurnResult, session *v
 	if a.EditID != "" {
 		return c.publishEditOutput(a, turn, session)
 	}
+	if a.FlowRun != "" {
+		c.publicationMu.Lock()
+		defer c.publicationMu.Unlock()
+	}
+	return c.publishOutputLocked(a, turn, session)
+}
+func (c *Canvas) publishOutputLocked(a attempt, turn *client.TurnResult, session *v1.Session) (string, error) {
 	id, uid, digest := a.ID, session.GetMetadata().GetUid(), session.GetAnnotations()["bundle-digest"]
 	failureReason := ""
 	var changes map[string]string
 	var err error
 	if a.FlowRun != "" {
-		c.publicationMu.Lock()
-		defer c.publicationMu.Unlock()
+		if c.editFence() != nil {
+			return "", c.update(a.ID, func(saved *attempt) {
+				saved.Status = "edit-blocked"
+				saved.Summary = "Native output parked behind the edit fence."
+			})
+		}
 		if !c.flowPublishAllowed(a) {
 			return "Workflow binding is no longer publishable.", errOutputRejected
 		}

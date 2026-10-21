@@ -12,10 +12,13 @@ Local v1alpha3 definitions may bind a non-input document to an existing agent
 with `editAgent`; that agent must already read and propose the document. Editing
 never creates agents or changes accepted bytes. The panel asks that agent for a
 separate, fresh native attempt and one whole-document replacement proposal.
-Human acceptance remains a separate whole-proposal decision. This slice is
-**document-only**: every nonempty `FlowRun` is refused, including unknown or
-completed run IDs. An empty association also refuses while any nonterminal flow
-exists; failed/uncertain work is not silently treated as complete.
+Human acceptance remains a separate whole-proposal decision.
+
+An edit is either document-only or explicitly associated with the inspected
+current eligible flow via `FlowRun`. An empty association refuses while any
+nonterminal flow exists; failed/uncertain work is not silently treated as complete.
+Unknown, terminal or otherwise ineligible flow IDs refuse without an edit attempt.
+The panel never silently reopens a completed flow.
 
 An omitted selector means the whole document. Explicit JSON Pointers must exist
 at the inspected revision; malformed, missing or ambiguous selectors refuse
@@ -31,46 +34,59 @@ One durable edit slot freezes the revision, document digest, scope and request
 key. Reads and restart never retry work. Unknown outcomes retain the slot until
 explicit exact-request reconciliation or abandonment. A review intent proven
 uncommitted by the local Git proposal and complete history restores a pending
-proposal for **fresh human review**, never replays the decision. Abandoned output
-cannot be accepted through generic review. Other reviews, input ingestion,
-manual/flow admission, action decisions and Continue are fenced while the edit
-slot is held. Accepting an edit invalidates old-base proposals without reopening,
-advancing or rerunning a flow.
+proposal for **fresh human review**, never replays the decision. This minimum
+durable request/native-attempt binding and Git publication/review-intent recovery
+is shared with standalone document-only editing, not conditional on a flow.
+Reopening may retain an uncertain record; it never retries a producer or applies
+a new publication or human decision. Released edit pauses survive restart.
+Abandoned output cannot be accepted through generic review. Other reviews, input
+ingestion, manual/flow admission, action decisions and Continue are fenced while
+the edit slot is held. Existing native work may finish
+but its flow output parks until an explicit still-current resume.
 
-A document-only edit refuses admission while the same document has an unsettled
-manual action, before spending an edit attempt; it never retires that manual
-handle as a side effect. Concluded and unrelated operations retain their records
-and receipts. Local abandonment is not proof of native cancellation or settlement;
-Native Cancel remains unsupported at the qualified Sessions pin. No synthetic
-cancel or automatic cleanup shortcut is provided.
+Each in-flow edit spends the same flow budget, even when rejected or invalid.
+Accepting an edit invalidates old-base proposals, then pauses the flow.
+In-flow edits revoke only that flow's affected, unexecuted handles. Concluded,
+effect-reserved and unrelated operations retain their existing records and
+receipts. A document-only edit refuses admission while the same document has an
+unsettled manual action, before spending an edit attempt; it never retires that
+manual handle as a side effect. Explicit rerun starts at the first agent step with current
+accepted bytes, preserved history and only the remaining budget. No approvals
+carry over. Terminal/effect-committed flows require a separate document-only
+edit; a new effectful run still requires an explicit new Run and human gates.
+Native Cancel remains unsupported at the qualified Sessions pin: unresolved
+parked work/effects block rerun, and a local tombstone is not proof of settlement.
+Revoking an affected in-flow parked action may also block later flow starts or
+retirement; this pin provides no safe native cancellation shortcut.
 
 The local HTTP surface is `GET /api/edits`, `/api/edit`, `/api/edit/context` and
-`POST /api/edit/request`, `/reconcile`, `/abandon` (all POST
+`POST /api/edit/request`, `/reconcile`, `/abandon`, `/resume`, `/rerun` (all POST
 suffixes under `/api/edit`). Review still uses `/api/review`. Requests bind the
 compiled document ID, full base revision/digest, optional selector, instruction,
-request key and local role. Limits are 2,000 instruction bytes, 65,536 document
-bytes, 512 pointer bytes, 16 heading components of 128 bytes, and 128 retained
+request key, local role and optional current flow-run ID. Limits are 2,000
+instruction bytes, 65,536 document bytes, 512 pointer bytes, 16 heading components
+of 128 bytes, and 128 retained
 edit requests per instance. These local routes refuse authenticated/remote
 Sessions modes; local labels are unverified attribution, not authorization or
 OS containment. No live-model, hosted identity or real-action qualification is
 implied by the deterministic fixture.
 
-Durable request/native-attempt binding and Git publication/review intents are
-required for standalone lost-reply and restart safety. Reopening may retain an
-uncertain record; it never retries a producer or applies a new publication or
-human decision. Ordinary explicit Reconcile inspects the exact owned native
-and Git evidence rather than guessing success or retrying a producer. An abandoned
-document-only edit may also be explicitly reconciled read-back-only: exact
-service-owned native execution, input, bundle and stable hash-chain END evidence
-sets optional `nativeSettled` and clears only its admission bookkeeping. The edit
-and output remain abandoned; no proposal, acceptance, dispatch or Resume occurs.
-Missing UID or unknown/incomplete evidence retains the native admission fence.
-Nothing automatically opens a repair path or publishes abandoned output.
+An abandoned document-only edit may be explicitly reconciled read-back-only:
+exact service-owned native execution, input, bundle and stable hash-chain END
+evidence sets optional `nativeSettled` and clears only its admission bookkeeping.
+This minimum standalone recovery also applies to flow-associated abandoned
+attempts. The edit and output remain abandoned; no proposal, acceptance, dispatch
+or Resume occurs. Missing UID or unknown/incomplete evidence retains the native
+admission fence. Nothing automatically opens a repair path or publishes abandoned
+output. Ordinary explicit Reconcile likewise inspects exact owned native and Git
+evidence rather than guessing success or retrying a producer.
 
-Flow-associated editing, Resume/Rerun controls and routes, shared-budget
-accounting, restart checkpoints and edit-aware aggregate replay remain future
-work. The existing flow recovery/replay described below is unchanged; it does
-not claim edit coverage.
+Flow replay adds ordinary and edit attempts, their native zero-call reconstruction,
+human review evidence and explicit accepted-edit restart checkpoints. Unknown
+native outcomes remain incomplete. Verification never manufactures settlement,
+dispatches work or repeats human decisions. Multiple historical action handles
+conservatively remain incomplete rather than being silently ignored, even if a
+local handle was revoked.
 
 Maintenance responses distinguish a proven unreserved refusal (`EDIT_REFUSED`)
 from a recorded/unknown command. The panel may discard only the former; otherwise
@@ -213,5 +229,5 @@ rewrites that run's selected budget. The pinned native verifier cannot
 reconstruct a denied tool execution even after explicit cleanup; that aggregate
 remains incomplete. Remote Sessions refuses plaintext diagnostic fallback.
 
-Flow-associated edits, MCP adapters and hosted revocation qualification remain
+Version comparison, MCP adapters and hosted revocation qualification remain
 later work. Local abandonment is not proof of remote cancellation or absence of an orphan.

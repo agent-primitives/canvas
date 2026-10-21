@@ -46,3 +46,41 @@ func TestEditUncommittedReviewRequiresFreshDecision(t *testing.T) {
 		})
 	}
 }
+func TestEditCancelCannotAbandonUnknownReview(t *testing.T) {
+	c, _ := workflowFixture(t, false, func(input map[string]any) string {
+		if input["edit"] != nil {
+			return changeEnvelope("prd", validPRD)
+		}
+		return ""
+	})
+	f := startWorkflow(t, c, "unknown-edit-review-flow", 12)
+	f = waitWorkflow(t, c, f.ID, "review")
+	r, e := c.RequestEdit(context.Background(), editRequest(t, c, f.ID, "unknown-edit-review"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	r = waitEdit(t, c, r.ID, "proposal")
+	c.wg.Wait()
+	original := c.space
+	c.space = editLostReviewSpace{original}
+	if _, e = c.Review(r.Proposal, "accept", "GM"); e == nil {
+		t.Fatal("expected lost committed review reply")
+	}
+	c.space = original
+	if _, e = c.CancelFlow(context.Background(), FlowCancel{Run: f.ID, Role: "GM"}); e == nil {
+		t.Fatal("cancel abandoned an unknown human decision")
+	}
+	edit, e := c.GetEdit(context.Background(), r.ID)
+	if e != nil || edit.State != "uncertain" || c.data.EditSlot != r.ID {
+		t.Fatal("cancel rewrote accepted bytes as abandonment", edit, e)
+	}
+	c.mu.Lock()
+	record := *c.flowRecordLocked(f.ID)
+	c.mu.Unlock()
+	if record.CancelRequested || record.Revocation != 0 {
+		t.Fatal("refused cancel mutated fences", record)
+	}
+	if _, e = c.ReconcileEdit(context.Background(), EditMaintenance{Edit: r.ID, Role: "GM", RequestKey: "recover-before-cancel", ExpectedHead: mustHead(t, c), Confirmed: true}); e != nil {
+		t.Fatal(e)
+	}
+}

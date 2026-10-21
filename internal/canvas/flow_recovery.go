@@ -31,6 +31,8 @@ func cloneFlowRecord(r flowRunRecord) flowRunRecord {
 	r.InputBytes = slices.Clone(r.InputBytes)
 	r.Reviews = slices.Clone(r.Reviews)
 	r.Generations = slices.Clone(r.Generations)
+	r.EditIDs = slices.Clone(r.EditIDs)
+	r.EditCheckpoints = slices.Clone(r.EditCheckpoints)
 	return r
 }
 
@@ -41,6 +43,9 @@ func (c *Canvas) claimFlowDispatchStageLocked(a *attempt, stage string) bool {
 		return true
 	}
 	f := c.flowLocked(a.FlowRun)
+	if f != nil && (f.State == "edited" || f.State == "edit-paused") {
+		return false
+	}
 	if !c.flowGenerationCurrentLocked(f, a) {
 		a.FlowStage = "cancelled-undispatched"
 		if r := c.flowRecordLocked(a.FlowRun); r != nil && r.CancelRequested && f != nil && f.Attempt == a.ID && !c.flowEffectBusyLocked(f.ID) {
@@ -210,8 +215,17 @@ func (c *Canvas) ReconcileFlow(ctx context.Context, q FlowMaintenance) (FlowRun,
 	if e != nil {
 		return f, e
 	}
-	if err := c.editFence(); err != nil {
-		return f, err
+	c.mu.Lock()
+	cancelRequested := c.flowRecordLocked(f.ID).CancelRequested
+	rerunPending := c.flowEditPauseLocked(c.flowRecordLocked(f.ID)) != ""
+	for _, edit := range c.data.Edits {
+		if edit.Request.FlowRun == f.ID && (edit.RerunPending || edit.ResumePending) {
+			rerunPending = true
+		}
+	}
+	c.mu.Unlock()
+	if (rerunPending && !cancelRequested) || c.editFence() != nil || f.State == "edited" || f.State == "edit-paused" {
+		return f, ErrEditConflict
 	}
 	who, e := c.authorizeFlowMaintenance(ctx, f, q.Role, "reconcile")
 	if e != nil {
@@ -237,7 +251,7 @@ func (c *Canvas) ReconcileFlow(ctx context.Context, q FlowMaintenance) (FlowRun,
 		}
 		return f, nil
 	}
-	if r.Generation == 0 || saved == nil || a.FlowGeneration != r.Generation || a.FlowRun != f.ID || a.FlowStep != f.Step || a.RequestedBy != f.RequestedBy || a.ExecutionOwner != f.ExecutionOwner || len(r.Generations) != r.Attempts || uint64(len(r.Generations)) != r.Generation || r.Generations[len(r.Generations)-1].Attempt != a.ID || r.Generations[len(r.Generations)-1].Step != a.FlowStep {
+	if r.Generation == 0 || saved == nil || a.FlowGeneration != r.Generation || a.FlowRun != f.ID || a.FlowStep != f.Step || a.RequestedBy != f.RequestedBy || a.ExecutionOwner != f.ExecutionOwner || len(r.Generations)+len(r.EditIDs) != r.Attempts || uint64(len(r.Generations)) != r.Generation || r.Generations[len(r.Generations)-1].Attempt != a.ID || r.Generations[len(r.Generations)-1].Step != a.FlowStep {
 		return f, ErrFlowConflict
 	}
 	if f.Action != "" {

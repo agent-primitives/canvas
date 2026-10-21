@@ -37,9 +37,11 @@ type FlowSessionProof struct {
 }
 
 type flowReplayRecord struct {
-	Flow     flowRunRecord
-	Attempts []attempt
-	Actions  []announcementOperation
+	Flow         flowRunRecord
+	Attempts     []attempt
+	Edits        []editRecord
+	EditAttempts []attempt
+	Actions      []announcementOperation
 }
 
 // JSON copying includes nested native proof pointers and private attempt DTOs;
@@ -50,9 +52,24 @@ func (c *Canvas) freezeFlowReplayLocked(run string) (flowReplayRecord, error) {
 		return flowReplayRecord{}, errNotFound
 	}
 	s := flowReplayRecord{Flow: cloneFlowRecord(*r)}
+	editIDs := map[string]bool{}
+	editAttempts := map[string]bool{}
+	for _, id := range r.EditIDs {
+		editIDs[id] = true
+	}
+	for _, e := range c.data.Edits {
+		if e.Request.FlowRun == run || editIDs[e.ID] {
+			s.Edits = append(s.Edits, e)
+			editIDs[e.ID] = true
+			editAttempts[e.Attempt] = true
+		}
+	}
 	for _, a := range c.data.Attempts {
 		if a.FlowRun == run {
 			s.Attempts = append(s.Attempts, a)
+		}
+		if a.EditID != "" && editIDs[a.EditID] || editAttempts[a.ID] {
+			s.EditAttempts = append(s.EditAttempts, a)
 		}
 	}
 	for _, op := range c.data.Announcements {
@@ -154,8 +171,13 @@ func (c *Canvas) VerifyFlow(ctx context.Context, run string) (FlowProof, error) 
 	}
 	steps := d.definition.Steps
 	n := len(r.Generations)
-	if n == 0 || r.Generation != uint64(n) || r.Attempts != n ||
-		n != len(frozen.Attempts) || r.AgentRuns < 1 || n > r.AgentRuns ||
+	edits, editAttempts, editBindings := editReplayBindings(frozen)
+	if !editBindings {
+		fail("Edit identities, associations or counted attempts are inconsistent.")
+		return deferDigest()
+	}
+	if n == 0 || r.Generation != uint64(n) || r.Attempts != n+len(edits) ||
+		n != len(frozen.Attempts) || r.AgentRuns < 1 || r.Attempts > r.AgentRuns ||
 		r.AgentRuns > d.definition.Limits.AgentRuns || c.flowOptions == nil ||
 		r.AgentRuns > c.flowOptions.MaxAgentRuns {
 		fail("Legacy, incomplete or inconsistent generation/budget history.")
@@ -163,8 +185,8 @@ func (c *Canvas) VerifyFlow(ctx context.Context, run string) (FlowProof, error) 
 	}
 	attempts := make(map[string]attempt, n)
 	for _, a := range frozen.Attempts {
-		if a.ID == "" {
-			fail("Missing attempt identity.")
+		if a.ID == "" || editAttempts[a.ID].ID != "" {
+			fail("Missing or overlapping attempt identity.")
 			return deferDigest()
 		}
 		if _, exists := attempts[a.ID]; exists {
@@ -178,7 +200,7 @@ func (c *Canvas) VerifyFlow(ctx context.Context, run string) (FlowProof, error) 
 		a, found := attempts[g.Attempt]
 		if !found || seen[g.Attempt] || g.Number != uint64(i+1) || g.Previous != uint64(i) ||
 			a.FlowGeneration != g.Number || a.FlowRun != run || a.FlowStep != g.Step ||
-			a.ExecutionOwner != r.ExecutionOwner || a.RequestedBy != r.RequestedBy {
+			a.ExecutionOwner != r.ExecutionOwner || a.RequestedBy != r.RequestedBy || a.EditID != "" {
 			fail("Generation chain or attempt binding is inconsistent.")
 			return deferDigest()
 		}
@@ -212,12 +234,22 @@ func (c *Canvas) VerifyFlow(ctx context.Context, run string) (FlowProof, error) 
 	}
 
 	// Freeze every session head before calling reconstruction on any session.
-	native := make(map[string]flowNativeSnapshot, n)
+	native := make(map[string]flowNativeSnapshot, r.Attempts)
 	versions := map[string]int{}
+	allAttempts := make([]attempt, 0, r.Attempts)
 	for _, g := range r.Generations {
-		a := attempts[g.Attempt]
-		s := FlowSessionProof{Kind: "agent", Attempt: a.ID, Session: a.Session}
-		if a.Session == "" && a.FlowStage == "queued" && a.ExpectedSeq == nil && a.Proposal == "" {
+		allAttempts = append(allAttempts, attempts[g.Attempt])
+	}
+	for _, id := range r.EditIDs {
+		allAttempts = append(allAttempts, editAttempts[edits[id].Attempt])
+	}
+	for _, a := range allAttempts {
+		kind := "agent"
+		if a.EditID != "" {
+			kind = "edit"
+		}
+		s := FlowSessionProof{Kind: kind, Attempt: a.ID, Session: a.Session}
+		if kind == "agent" && a.Session == "" && a.FlowStage == "queued" && a.ExpectedSeq == nil && a.Proposal == "" {
 			s.Coverage = "not-dispatched"
 			p.Sessions = append(p.Sessions, s)
 			continue
@@ -238,6 +270,20 @@ func (c *Canvas) VerifyFlow(ctx context.Context, run string) (FlowProof, error) 
 		if e != nil || !snapshot.Complete || !snapshot.Settled {
 			fail("Native agent execution is unavailable, failed or unfinished.")
 		}
+	}
+
+	provenEdits := map[string]bool{}
+	for _, id := range r.EditIDs {
+		e := edits[id]
+		a := editAttempts[e.Attempt]
+		provenEdits[id] = c.inspectEditReplay(ctx, r, e, a, native[a.ID], ps[e.Proposal])
+		if !provenEdits[id] {
+			fail("Edit lacks exact native output, frozen input, scope or reachable human review evidence.")
+		}
+	}
+	checkpoints, validCheckpoints := editReplayCheckpoints(r, edits, provenEdits)
+	if !validCheckpoints {
+		fail("Accepted edit restart checkpoints are missing or inconsistent.")
 	}
 
 	// Validate every decision, in generation order, not merely the last gate.
@@ -270,7 +316,18 @@ func (c *Canvas) VerifyFlow(ctx context.Context, run string) (FlowProof, error) 
 	accepted := map[string]string{}
 	base := r.StartBase
 	rejected := false
+	usedCheckpoints := 0
 	for _, g := range r.Generations {
+		if cp, restart := checkpoints[g.Number]; restart {
+			e := edits[cp.Edit]
+			if cp.BeforeGeneration != g.Previous || base != e.Request.BaseRevision {
+				fail("Edit restart does not continue the proven accepted base.")
+			} else {
+				position, base, rejected = 0, cp.AcceptedCommit, false
+				accepted = map[string]string{}
+				usedCheckpoints++
+			}
+		}
 		a := attempts[g.Attempt]
 		if rejected || position >= len(steps) || steps[position].Agent == "" ||
 			steps[position].ID != g.Step || steps[position].Agent != a.Agent || a.Base != base {
@@ -300,8 +357,10 @@ func (c *Canvas) VerifyFlow(ctx context.Context, run string) (FlowProof, error) 
 				// explicit same-step retry, never advancement without a gate.
 				_, validation := c.definition.ChangesForStep(r.Flow, g.Step, snapshot.Output)
 				rejectedOutput := hasNative && snapshot.Complete && snapshot.Settled && a.FlowStage == "completed" && a.Status == "failed" && a.Proposal == "" && validation != nil
-				if !rejectedOutput {
-					fail("Superseded attempt has no proven review or output-validation transition.")
+				cp, superseded := checkpoints[g.Number+1]
+				superseded = superseded && cp.BeforeGeneration == g.Number && provenEdits[cp.Edit] && edits[cp.Edit].Request.BaseRevision == base && hasNative && snapshot.Complete && snapshot.Settled
+				if !rejectedOutput && !superseded {
+					fail("Superseded attempt has no proven review, edit checkpoint or output-validation transition.")
 				}
 			}
 			continue
@@ -319,7 +378,7 @@ func (c *Canvas) VerifyFlow(ctx context.Context, run string) (FlowProof, error) 
 			rejected = intent.RequestKey == ""
 		}
 	}
-	if r.Position != position || !maps.Equal(accepted, r.Accepted) || base != p.Head {
+	if usedCheckpoints != len(r.EditCheckpoints) || r.Position != position || !maps.Equal(accepted, r.Accepted) || base != p.Head {
 		fail("Accepted bindings, position or current Git head do not match ordered decisions.")
 	}
 	if r.State == "rejected" && !rejected {
@@ -373,7 +432,7 @@ func (c *Canvas) VerifyFlow(ctx context.Context, run string) (FlowProof, error) 
 			fail("Native execution/head binding is missing.")
 			continue
 		}
-		if s.Kind == "agent" && !native[s.Attempt].Complete {
+		if (s.Kind == "agent" || s.Kind == "edit") && !native[s.Attempt].Complete {
 			continue
 		}
 		if s.Kind == "action" && !actionView.Concluded {

@@ -21,7 +21,7 @@ export function createEditPanel({ api, action, selectionChanged, currentFlow = (
   let enabled = false, ready = false;
   try { pending = JSON.parse(sessionStorage.getItem(storageKey) || 'null'); } catch { pending = null; }
   const current = () => snapshot?.edits.find(edit => edit.id === selectedEdit);
-  const activeFlow = () => { const flow = currentFlow(); return !!flow && !terminal(flow.state); };
+  const flowID = () => { const flow = currentFlow(); return flow && !terminal(flow.state) ? flow.id : ''; };
   const binding = () => JSON.stringify([metadata?.boot, metadata?.activeInstance || '']);
   const role = () => current()?.request.role || requesterRole;
   const blocked = () => !!snapshot?.slot || !!pending || sending;
@@ -51,17 +51,19 @@ export function createEditPanel({ api, action, selectionChanged, currentFlow = (
   }
   function controls(nextEnabled = enabled, nextReady = ready) {
     enabled = nextEnabled; ready = nextReady;
-    const edit = current(), valid = preview(), admissionBlocked = blocked() || activeFlow();
-    for (const id of ['edit-document','edit-instruction','edit-kind','edit-pointer','edit-headings','edit-occurrence']) $(id).disabled = !enabled || admissionBlocked;
+    const edit = current(), valid = preview();
+    for (const id of ['edit-document','edit-instruction','edit-kind','edit-pointer','edit-headings','edit-occurrence']) $(id).disabled = !enabled || blocked();
     $('edit-history').disabled = !enabled || sending;
-    $('edit-confirm').disabled = !enabled || admissionBlocked || !context || !valid;
-    $('edit-request').disabled = !enabled || !ready || admissionBlocked || !context || !valid || !$('edit-confirm').checked || !$('edit-instruction').value.trim();
+    $('edit-confirm').disabled = !enabled || blocked() || !context || !valid;
+    $('edit-request').disabled = !enabled || !ready || blocked() || !context || !valid || !$('edit-confirm').checked || !$('edit-instruction').value.trim();
     $('edit-continue').hidden = !pending;
     $('edit-continue').disabled = !enabled || !ready || sending || foreign;
     $('edit-command-confirm').disabled = !enabled || !ready || !edit || sending || !!pending;
     const confirmed = enabled && ready && $('edit-command-confirm').checked && !pending && !sending;
     $('edit-reconcile').disabled = !confirmed || !(['queued','running','uncertain','proposal'].includes(edit?.state) || (edit?.state === 'abandoned' && !edit.nativeSettled));
     $('edit-abandon').disabled = !confirmed || snapshot?.slot !== edit?.id;
+    $('edit-resume').disabled = !confirmed || !edit?.request.flowRun || !['rejected','failed','abandoned','stale'].includes(edit?.state);
+    $('edit-rerun').disabled = !confirmed || !edit?.request.flowRun || edit?.state !== 'accepted';
   }
   async function refresh(nextState, demo) {
     if (state?.head !== nextState.head || metadata?.boot !== demo.boot || metadata?.activeInstance !== demo.activeInstance) changed();
@@ -70,7 +72,7 @@ export function createEditPanel({ api, action, selectionChanged, currentFlow = (
     foreign = !!pending && pending.binding !== binding();
     if (!snapshot.edits.some(edit => edit.id === selectedEdit)) selectedEdit = snapshot.slot || snapshot.edits.at(-1)?.id || '';
     if (snapshot.slot) selectedEdit = snapshot.slot;
-    const nextKey = JSON.stringify([binding(), state.head, snapshot, selectedEdit]);
+    const nextKey = JSON.stringify([binding(), state.head, snapshot, flowID(), selectedEdit]);
     if (nextKey !== evidenceKey) { evidenceKey = nextKey; changed(); }
     const doc = $('edit-document');
     const oldDocument = doc.value;
@@ -80,24 +82,25 @@ export function createEditPanel({ api, action, selectionChanged, currentFlow = (
     const history = $('edit-history'); history.replaceChildren(); history.add(new Option('No edit selected', ''));
     snapshot.edits.forEach(edit => history.add(new Option(edit.request.document + ': ' + edit.state + ' (' + edit.id + ')', edit.id)));
     history.value = selectedEdit;
-    const nextContext = JSON.stringify([binding(), state.head, doc.value]);
+    const nextContext = JSON.stringify([binding(), state.head, doc.value, flowID()]);
     if (nextContext !== contextKey) {
       context = null; contextKey = ''; changed();
       if (doc.value) {
         const query = new URLSearchParams({ document: doc.value });
+        if (flowID()) query.set('flowRun', flowID());
         const found = await api('/api/edit/context?' + query);
-        if (found.baseRevision !== state.head || found.document !== doc.value) return false;
+        if (found.baseRevision !== state.head || found.document !== doc.value || found.flowRun !== flowID()) return false;
         context = found;
       }
       contextKey = nextContext;
     }
     $('edit-panel').hidden = !snapshot.documents.length && !snapshot.edits.length && !pending;
-    $('edit-base').textContent = context ? 'Accepted revision: ' + context.baseRevision + '\nDocument SHA-256: ' + context.baseDigest + '\nEditor: ' + context.agent + '\nDocument-only edit. No flow is associated or reopened.' : 'No editable accepted document is available.';
+    $('edit-base').textContent = context ? 'Accepted revision: ' + context.baseRevision + '\nDocument SHA-256: ' + context.baseDigest + '\nEditor: ' + context.agent + (context.flowRun ? '\nAssociated active flow: ' + context.flowRun : '\nDocument-only edit. No completed flow is reopened.') : 'No editable accepted document is available.';
     $('edit-accepted').textContent = context?.content || '';
     const edit = current();
-    $('edit-status').textContent = foreign ? 'Saved request belongs to another engine boot or instance. Reopen the original view; it cannot be continued here.' : pending ? 'Reply unconfirmed. Exact request retained. Inspect, then explicitly Continue exact edit request. No automatic retry.' : edit ? 'Edit: ' + edit.state + (edit.state === 'abandoned' ? (edit.nativeSettled ? '. Native settlement proved; output stays abandoned.' : '. Explicit Reconcile may prove native settlement; output stays abandoned.') : '') + (edit.proposal ? '. Review the complete proposal below using Accept or Reject.' : '') : activeFlow() ? 'Document-only edits are unavailable while an active flow exists. Finish or safely cancel that flow first.' : 'Request a proposal, not an accepted-document change.';
+    $('edit-status').textContent = foreign ? 'Saved request belongs to another engine boot or instance. Reopen the original view; it cannot be continued here.' : pending ? 'Reply unconfirmed. Exact request retained. Inspect, then explicitly Continue exact edit request. No automatic retry.' : edit ? 'Edit: ' + edit.state + (edit.state === 'abandoned' ? (edit.nativeSettled ? '. Native settlement proved; output stays abandoned.' : '. Explicit Reconcile may prove native settlement; output stays abandoned.') : '') + (edit.proposal ? '. Review the complete proposal below using Accept or Reject.' : '') : 'Request a proposal, not an accepted-document change.';
     $('edit-detail').textContent = edit ? JSON.stringify(edit, null, 2) : '';
-    $('edit-resolved').textContent = edit ? 'Frozen resolved scope:\n' + JSON.stringify(edit.scope, null, 2) + '\nThe complete proposed document is shown in the normal proposal review below.' : '';
+    $('edit-resolved').textContent = edit ? 'Frozen resolved scope:\n' + JSON.stringify(edit.scope, null, 2) + '\nThe complete proposed document is shown in the normal proposal review below.' + (currentFlow()?.action ? '\nWarning: accepting an edit revokes the parked action. Native Cancel is unavailable; rerun, later flow starts or retirement may remain blocked.' : '') : '';
     controls();
     return true;
   }
@@ -117,15 +120,16 @@ export function createEditPanel({ api, action, selectionChanged, currentFlow = (
     } finally { sending = false; controls(); }
   }
   $('edit-request').onclick = () => action(async () => {
-    if (blocked() || activeFlow() || !context || !$('edit-confirm').checked) return;
+    if (blocked() || !context || !$('edit-confirm').checked) return;
     const section = scope();
     const body = { document: context.document, baseRevision: context.baseRevision, baseDigest: context.baseDigest, instruction: $('edit-instruction').value, requestKey: crypto.randomUUID(), role: requesterRole };
+    if (context.flowRun) body.flowRun = context.flowRun;
     if (section) body.section = section;
     pending = { binding: binding(), body }; persist();
     await submitExact();
   }, 'edit-confirm');
   $('edit-continue').onclick = () => action(submitExact);
-  for (const command of ['reconcile','abandon']) $('edit-' + command).onclick = () => action(async () => {
+  for (const command of ['reconcile','abandon','resume','rerun']) $('edit-' + command).onclick = () => action(async () => {
     const edit = current();
     if (!edit || !$('edit-command-confirm').checked || pending) return;
     pending = { binding: binding(), route: '/api/edit/' + command, body: { edit: edit.id, role: edit.request.role, requestKey: crypto.randomUUID(), expectedHead: state.head, confirmed: true } }; persist();

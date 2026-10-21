@@ -50,8 +50,10 @@ function controls() {
   if (editing) {
     for (const id of ['draft','verify','request','action-confirm','approve','deny','continue','verify-action']) $(id).disabled = true;
     $('action-confirm').checked = false;
+    const flow = flowUI?.current();
+    if (flow && !['complete','cancelled','failed'].includes(flow.state)) $('flow-cancel').disabled = !enabled || !ready;
   }
-  $('verify-action').disabled = editing || !ready || view?.status !== 'simulated' || !view?.concluded || remoteSessions();
+  $('verify-action').disabled = !ready || view?.status !== 'simulated' || !view?.concluded || remoteSessions();
   setText('replay-help', remoteSessions() ? 'Remote replay diagnostics are unavailable. No 0/0 claim is made.' : !online || reopen ? 'Reconnect before verifying replay.' : view?.status === 'simulated' && view?.concluded ? 'Verify recorded integrity, not approval or evaluation quality.' : 'Action replay verification is available after a completed simulation, not a denial.');
 }
 function proofLabel(proof) {
@@ -142,7 +144,7 @@ async function render(generation) {
     if (!editUI) {
       const { createEditPanel } = await import('/edit.js');
       editUI = createEditPanel({
-        api, action, currentFlow: () => flowUI?.activeFlow(), requesterRole: demo.requesterRole || 'GM',
+        api, action, currentFlow: () => flowUI?.current(), requesterRole: demo.requesterRole || 'GM',
         selectionChanged: () => { inspected = ''; documentKey = ''; actionKey = ''; clearConfirmations(); }
       });
     }

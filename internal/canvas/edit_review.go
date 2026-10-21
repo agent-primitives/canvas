@@ -3,12 +3,14 @@ package canvas
 import (
 	"context"
 	"maps"
+	"slices"
 
 	"github.com/agent-primitives/canvas/internal/sharedspace"
+	"github.com/agent-primitives/sessions/client"
 )
 
 // publicationMu is held by every caller. Edit proposals never fall through to
-// generic review, even after release or abandonment.
+// generic review, even after release, abandonment or a new generation.
 func (c *Canvas) reviewEditLocked(ctx context.Context, id, action, role string) (bool, sharedspace.Proposal, error) {
 	c.mu.Lock()
 	var record *editRecord
@@ -92,6 +94,30 @@ func (c *Canvas) editProposalMatches(r editRecord, a attempt, p sharedspace.Prop
 }
 func (c *Canvas) applyEditReviewLocked(id string, p sharedspace.Proposal) error {
 	c.mu.Lock()
+	record := c.editLocked(id)
+	if record == nil {
+		c.mu.Unlock()
+		return ErrEditConflict
+	}
+	frozen := cloneEdit(*record)
+	operations := cloneEdit(c.data.Announcements)
+	c.mu.Unlock()
+	var revoke []string
+	if frozen.ReviewAction == "accept" && !frozen.ReviewApplied && frozen.Request.FlowRun != "" {
+		for _, op := range operations {
+			if op.FlowRun != frozen.Request.FlowRun || op.EffectReserved || op.EffectSettled {
+				continue
+			}
+			view, err := c.inspectAnnouncement(context.Background(), op)
+			if err != nil || view.Confirmation.Unavailable {
+				return ErrEditConflict
+			}
+			if !view.Concluded {
+				revoke = append(revoke, op.Snapshot.Operation)
+			}
+		}
+	}
+	c.mu.Lock()
 	defer c.mu.Unlock()
 	r := c.editLocked(id)
 	if r == nil || p.ID != r.Proposal || r.ReviewAction == "" || (r.Reviewer.Issuer != "" && p.Reviewer != r.Reviewer) || (r.Reviewer.Issuer == "" && p.Reviewer != (sharedspace.ReviewActor{})) {
@@ -127,6 +153,14 @@ func (c *Canvas) applyEditReviewLocked(id string, p sharedspace.Proposal) error 
 		}
 		r.State = "accepted"
 		r.AcceptedCommit = p.AcceptedCommit
+		// Native handles remain tombstoned across restart. Only read-back proving
+		// settlement can permit a later rerun; local revocation is not native Cancel.
+		for i := range c.data.Announcements {
+			op := &c.data.Announcements[i]
+			if slices.Contains(revoke, op.Snapshot.Operation) {
+				op.Revoked = true
+			}
+		}
 	} else if r.ReviewAction == "reject" && p.Status == "rejected" {
 		r.State = "rejected"
 	} else {
@@ -195,4 +229,182 @@ func (c *Canvas) reconcileEditReviewLocked(r editRecord, a attempt, output strin
 		}
 	}
 	return r.EditRun, ErrEditConflict
+}
+func (c *Canvas) ResumeAfterEdit(ctx context.Context, q EditMaintenance) (FlowRun, error) {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+	c.mu.Lock()
+	r := c.editLocked(q.Edit)
+	if r == nil || r.Request.FlowRun == "" || r.State != "rejected" && r.State != "failed" && r.State != "abandoned" && r.State != "stale" {
+		c.mu.Unlock()
+		return FlowRun{}, ErrEditConflict
+	}
+	f := c.flowRecordLocked(r.Request.FlowRun)
+	if f == nil || c.data.EditSlot != "" || f.CancelRequested || f.Revocation != 0 || f.Generation != r.Generation {
+		c.mu.Unlock()
+		return FlowRun{}, ErrEditConflict
+	}
+	if e := c.editCommandLocked(r, q, "resume"); e != nil {
+		c.mu.Unlock()
+		return FlowRun{}, e
+	}
+	head, e := c.space.Head()
+	if e != nil || head != q.ExpectedHead || head != r.Request.BaseRevision {
+		c.mu.Unlock()
+		return FlowRun{}, ErrEditConflict
+	}
+	if f.State != "edit-paused" && !r.ResumePending {
+		out := cloneFlowRun(f.FlowRun)
+		c.mu.Unlock()
+		return out, nil
+	}
+	currentAttempt := c.findLocked(f.Attempt)
+	if currentAttempt == nil {
+		c.mu.Unlock()
+		return FlowRun{}, ErrEditConflict
+	}
+	r.Commands["resume"] = commandDigest(q, rRequestActor(c, r))
+	a := *currentAttempt
+	previous := r.PreviousState
+	r.ResumePending = previous == "running" && a.Session != ""
+	f.State = previous
+	if previous == "running" && a.Session == "" {
+		f.State = "paused"
+	}
+	e = c.saveLocked()
+	fid := f.ID
+	c.mu.Unlock()
+	if e != nil {
+		return FlowRun{}, e
+	}
+	if previous == "running" && a.Session != "" {
+		n, e := c.readFlowExecution(ctx, a)
+		if e != nil || !n.Settled {
+			return FlowRun{}, ErrEditConflict
+		}
+		_, invalid := c.definition.ChangesForStep(f.Flow, a.FlowStep, n.Output)
+		if !n.Complete || invalid != nil {
+			err := c.update(a.ID, func(saved *attempt) {
+				saved.Status = "failed"
+				saved.FlowStage = "completed"
+				saved.Error = "The settled parked output failed step validation."
+				if edit := c.editLocked(q.Edit); edit != nil {
+					edit.ResumePending = false
+				}
+			})
+			if err != nil {
+				return FlowRun{}, err
+			}
+			return c.GetFlow(ctx, fid)
+		}
+		service, sessions, release, e := c.serviceContext(ctx)
+		if e != nil {
+			return FlowRun{}, e
+		}
+		defer release()
+		s, e := sessions.GetSession(service, a.Session)
+		if e != nil {
+			return FlowRun{}, e
+		}
+		proposals, err := c.space.Proposals()
+		if err != nil {
+			return FlowRun{}, err
+		}
+		changes, err := c.definition.ChangesForStep(f.Flow, a.FlowStep, n.Output)
+		if err != nil {
+			return FlowRun{}, err
+		}
+		for _, p := range proposals {
+			if p.Attribution.Run == a.ID {
+				if p.Status != "pending" || p.Base != a.Base || !maps.Equal(p.Changes, changes) || p.Attribution.FlowRun != fid || p.Attribution.FlowStep != a.FlowStep || p.Attribution.Session != a.Session || p.Attribution.BundleDigest != a.BundleDigest || p.Attribution.ExecutionOwner != a.ExecutionOwner || p.Attribution.RequestedBy != a.RequestedBy || !maps.Equal(p.Attribution.Sources, a.Sources) {
+					return FlowRun{}, ErrEditConflict
+				}
+				if err := c.update(a.ID, func(saved *attempt) { saved.Proposal = p.ID; saved.Status = "proposed" }); err != nil {
+					return FlowRun{}, err
+				}
+				return c.GetFlow(ctx, fid)
+			}
+		}
+		_, e = c.publishOutputLocked(a, &client.TurnResult{Output: n.Output}, s)
+		if e != nil {
+			return FlowRun{}, e
+		}
+	}
+	return c.GetFlow(ctx, fid)
+}
+func (c *Canvas) RerunAfterEdit(ctx context.Context, q EditMaintenance) (FlowRun, error) {
+	c.publicationMu.Lock()
+	defer c.publicationMu.Unlock()
+	c.mu.Lock()
+	saved := c.editLocked(q.Edit)
+	if saved == nil || saved.Request.FlowRun == "" || saved.State != "accepted" || !q.Confirmed || q.Role != saved.Request.Role {
+		c.mu.Unlock()
+		return FlowRun{}, ErrEditConflict
+	}
+	f := c.flowRecordLocked(saved.Request.FlowRun)
+	if f == nil || c.data.EditSlot != "" || f.CancelRequested || f.Revocation != 0 {
+		c.mu.Unlock()
+		return FlowRun{}, ErrEditConflict
+	}
+	continuing := saved.RerunPending
+	if old, ok := saved.Commands["rerun"]; ok {
+		if old != commandDigest(q, rRequestActor(c, saved)) {
+			c.mu.Unlock()
+			return FlowRun{}, ErrEditConflict
+		}
+		if !continuing {
+			out := cloneFlowRun(f.FlowRun)
+			c.mu.Unlock()
+			return out, nil
+		}
+	}
+	if (!continuing && f.State != "edited") || f.Generation != saved.Generation || f.Attempts >= f.AgentRuns {
+		c.mu.Unlock()
+		return FlowRun{}, ErrEditConflict
+	}
+	r := cloneEdit(*saved)
+	ops := cloneEdit(c.data.Announcements)
+	c.mu.Unlock()
+	head, e := c.space.Head()
+	if e != nil || head != q.ExpectedHead || head != r.AcceptedCommit {
+		return FlowRun{}, ErrEditConflict
+	}
+	for _, op := range ops {
+		if op.FlowRun == r.Request.FlowRun {
+			view, e := c.inspectAnnouncement(ctx, op)
+			if e != nil || !view.Concluded || view.Receipt != nil {
+				return FlowRun{}, ErrFlowCancelPending
+			}
+		}
+	}
+	c.mu.Lock()
+	saved = c.editLocked(r.ID)
+	if e := c.editCommandLocked(saved, q, "rerun"); e != nil {
+		c.mu.Unlock()
+		return FlowRun{}, e
+	}
+	saved.Commands["rerun"] = commandDigest(q, rRequestActor(c, saved))
+	f = c.flowRecordLocked(r.Request.FlowRun)
+	saved.RerunPending = true
+	if !continuing {
+		f.EditCheckpoints = append(f.EditCheckpoints, editCheckpoint{Edit: r.ID, BeforeGeneration: r.Generation, AcceptedCommit: r.AcceptedCommit, RestartGeneration: f.Generation + 1})
+	}
+	f.Position = 0
+	f.Accepted = map[string]string{}
+	f.Proposal = ""
+	f.Action = ""
+	f.State = "ready"
+	f.ReadyHead = head
+	if !continuing {
+		f.Feedback = append(f.Feedback, FlowFeedback{Proposal: r.Proposal, Text: "Scoped edit " + r.ID + " accepted; rerun from the first step using current accepted bytes.", Actor: r.Reviewer})
+	}
+	e = c.saveLocked()
+	fid := f.ID
+	c.mu.Unlock()
+	if e != nil {
+		return FlowRun{}, e
+	}
+	e = c.dispatchFlowLocked(ctx, fid, r.Reviewer, r.Proposal)
+	out, _ := c.GetFlow(ctx, fid)
+	return out, e
 }
