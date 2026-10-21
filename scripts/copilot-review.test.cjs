@@ -68,6 +68,72 @@ test('thin adapter keeps engine cookie private and forwards only reviewed routes
   assert.equal(response.status, 200);
 });
 
+test('authoring bridge binds the inspected instance and only explicit successful activation renews its boot', async t => {
+  const { startBridge } = await import(moduleURL);
+  let boot = 'inert', activeInstance = '', loseReply = false;
+  const observed = [];
+  const upstream = createServer(async (req, res) => {
+    if (req.url === '/') { res.setHeader('Set-Cookie', 'canvas-local=secret; HttpOnly'); res.end('shell'); return; }
+    if (req.url === '/api/demo') { res.end(JSON.stringify({ mode: activeInstance ? 'deterministic-northwind' : 'inert-authoring', realModelCalls: 0, authoring: true, headlessPrefix: '/engine', boot, activeInstance })); return; }
+    observed.push({ url: req.url, instance: req.headers['x-canvas-instance'] });
+    if (req.url === '/api/authoring/activate') {
+      const chunks = []; for await (const chunk of req) chunks.push(chunk);
+      const body = JSON.parse(Buffer.concat(chunks));
+      assert.equal(body.candidate, 'frozen'); assert.equal(body.expectedCurrent, activeInstance);
+      activeInstance = activeInstance ? 'second' : 'first'; boot = activeInstance;
+      if (loseReply) { req.socket.destroy(); return; }
+      res.end(JSON.stringify({ instance: { id: activeInstance, package: body.candidate, previous: body.expectedCurrent } })); return;
+    }
+    res.end(JSON.stringify({ ok: true }));
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  t.after(() => { upstream.closeAllConnections(); return new Promise(resolve => upstream.close(resolve)); });
+  const engineURL = `http://127.0.0.1:${upstream.address().port}`;
+  const bridge = await startBridge({ engineURL }); t.after(() => bridge.close());
+  const stale = await startBridge({ engineURL }); t.after(() => stale.close());
+  const headers = b => ({ 'x-canvas-review-token': new URL(b.url).hash.slice(7), 'Content-Type': 'application/json', Origin: b.origin, 'X-Canvas-Instance': 'caller-forged' });
+  const call = (route, body, b = bridge) => fetch(b.origin + route, { headers: headers(b), ...(body ? { method: 'POST', body: JSON.stringify(body) } : {}) });
+  for (const route of ['/api/authoring', '/api/authoring/candidate?id=frozen', '/api/authoring/file?candidate=frozen&path=flow.yaml', '/api/authoring/instance?id=old']) assert.equal((await call(route)).status, 200);
+  assert.equal((await call('/api/authoring/prepare', { definition: 'flow.yaml' })).status, 200);
+  assert.equal((await call('/api/authoring/arbitrary')).status, 404);
+  assert.equal((await call('/api/authoring/activate/extra', {})).status, 404);
+  assert.equal((await fetch(bridge.origin + '/activation.js')).status, 200);
+  const payload = { candidate: 'frozen', expectedCurrent: '', requestKey: 'same-key', confirmed: true, actor: 'local person (unverified)' };
+  assert.equal((await call('/api/authoring/activate', payload)).status, 200);
+  assert.equal((await call('/api/state')).status, 200);
+  assert.deepEqual(observed.at(-1), { url: '/engine/api/state', instance: 'first' });
+  assert.equal((await call('/api/review', {}, stale)).status, 409);
+  assert.equal((await call('/api/authoring', null, stale)).status, 200, 'stale panels may inspect history, not rebind runtime');
+  loseReply = true;
+  assert.equal((await call('/api/authoring/activate', { ...payload, expectedCurrent: 'first', requestKey: 'next' })).status, 503);
+  assert.equal((await call('/api/authoring')).status, 200);
+  assert.equal((await call('/api/state')).status, 409, 'a lost committed reply must require reopen, never automatic rebind');
+});
+
+test('pending activation restart binds its durable exact request without claiming a live predecessor', async t => {
+  const { startBridge } = await import(moduleURL);
+  const request = { candidate: 'frozen', expectedCurrent: 'old', requestKey: 'durable-key', confirmed: true, actor: 'local person (unverified)' };
+  let activeInstance = '', boot = 'pending', pendingActivation = { ...request, instance: 'new' };
+  const upstream = createServer(async (req, res) => {
+    if (req.url === '/') { res.setHeader('Set-Cookie', 'canvas-local=secret; HttpOnly'); res.end('shell'); return; }
+    if (req.url === '/api/demo') { res.end(JSON.stringify({ mode: activeInstance ? 'deterministic-northwind' : 'inert-authoring', realModelCalls: 0, authoring: true, headlessPrefix: '/engine', boot, activeInstance, pendingActivation })); return; }
+    if (req.url === '/api/authoring/activate') {
+      const parts = []; for await (const chunk of req) parts.push(chunk);
+      assert.deepEqual(JSON.parse(Buffer.concat(parts)), request);
+      activeInstance = 'new'; boot = 'active'; pendingActivation = undefined;
+      res.end(JSON.stringify({ instance: { id: 'new', package: 'frozen', previous: 'old' } })); return;
+    }
+    assert.equal(req.headers['x-canvas-instance'], 'new'); res.end('{}');
+  });
+  await new Promise(resolve => upstream.listen(0, '127.0.0.1', resolve));
+  t.after(() => { upstream.closeAllConnections(); return new Promise(resolve => upstream.close(resolve)); });
+  const bridge = await startBridge({ engineURL: `http://127.0.0.1:${upstream.address().port}` }); t.after(() => bridge.close());
+  const headers = { 'x-canvas-review-token': new URL(bridge.url).hash.slice(7), 'Content-Type': 'application/json', Origin: bridge.origin };
+  const result = await fetch(bridge.origin + '/api/authoring/activate', { method: 'POST', headers, body: JSON.stringify(request) });
+  assert.equal(result.status, 200, await result.text());
+  assert.equal((await fetch(bridge.origin + '/api/state', { headers })).status, 200);
+});
+
 test('adapter refuses remote or malformed engine URLs before network access', async () => {
   const { startBridge } = await import(moduleURL);
   for (const engineURL of ['http://localhost:18878', 'https://127.0.0.1:18878', 'http://127.0.0.1:18878/path', 'http://user:pass@127.0.0.1:18878', 'http://127.0.0.1:18878/?token=x']) {

@@ -134,6 +134,9 @@ func (c *Canvas) serviceContext(parent context.Context) (context.Context, *clien
 // requester captures verified attribution during admission. Queued work keeps
 // only this provenance, never the request credential or lifetime.
 func (c *Canvas) requester(ctx context.Context, role string) (sessionauth.Identity, sharedspace.ReviewActor, error) {
+	if err := c.ctx.Err(); err != nil {
+		return sessionauth.Identity{}, sharedspace.ReviewActor{}, err
+	}
 	if _, err := c.actionIdentity(ctx, role); err != nil {
 		return sessionauth.Identity{}, sharedspace.ReviewActor{}, err
 	}

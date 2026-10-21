@@ -31,10 +31,12 @@ The optional `-state` path must be a dedicated demo directory. Do not point it a
 another Canvas or prototype's state. `-listen` supports isolated tests, but the
 Copilot extension expects the default port.
 
-The fixture reads the checked-in Northwind definition and suites. Their captured
-inventory includes file modes, so use a normal checkout with 0644 source files
-and 0755 directories, not a checkout created under umask 077. Do not weaken inventory validation or
-rewrite artifact pins to accommodate different modes.
+The fixture reads the checked-in Northwind definition and suites. Suite v0.6 uses
+portable loose-file identity: ordinary files default to 0644 and directories to
+0755; executable modes come from declarations, not host chmod bits. Artifact
+bytes and pins are unchanged. Older retained suites with nondefault ordinary-file
+modes such as 0600/0755 can refuse reopening; there is no automatic history
+migration, repacking or pin repair.
 
 ## Opt into the local flow panel
 
@@ -75,10 +77,68 @@ may be unsupported: a persisted cancellation fence is not proof of remote
 cancellation or settled execution. Aggregate replay reports incomplete coverage
 honestly and only shows 0/0 when actual linked native proofs establish it.
 
-This is an operator-loaded definition, not chat-driven draft activation. The flow
-panel does not implement setup activation, scoped edits, version comparison, MCP
-or new agent-callable SDK actions. No visual redesign or actual Copilot app/WSL,
-hosted identity, real-action or cloud qualification is implied.
+This path uses an operator-loaded definition. For frozen draft activation use the
+separate mode below. Scoped edits, version comparison, MCP and agent-callable SDK
+actions remain absent. No visual redesign or actual Copilot app/WSL, hosted
+identity, real-action or cloud qualification is implied.
+
+## Freeze, review and activate a draft
+
+Keep drafts outside runtime state and watcher/input directories. With a new,
+dedicated state directory, the local operator can open an **inactive** shell:
+
+```sh
+go run ./cmd/copilot-review -draft-root /path/to/review-draft \
+  -state .state/copilot-authoring
+```
+
+For a flow-bearing package, also supply a positive operator ceiling, for example
+`-flow-agent-runs 12`. This mode refuses `-definition` and remote/authenticated or
+trusted Sessions combinations. Existing operator startup and manual defaults do
+not change. Generated manual templates use their qualified deterministic fixture. Northwind's
+fixture requires its reviewed schema bytes, document/agent scopes and suite pins;
+metadata, valid seeds, gates and budgets may change. Other shapes or suites require
+a supported operator provider configuration. Binding
+and validation do not qualify arbitrary models or runtime profiles.
+
+Open the installed panel below. **Prepare frozen package** explicitly captures the
+selected definition and its transitive schemas, seeds, evaluation references and
+complete local suite layouts. It copies no unrelated workspace files. The limit
+is 1,024 files, 32 MiB total and 8 MiB per file, with stricter compiler limits still
+applied; unsafe paths, symlinks, incomplete or corrupt dependencies refuse. Wrapper
+files use portable 0644/0755 modes; embedded artifact bytes remain exact. Reads,
+reloads and source edits never prepare, activate or start Sessions automatically.
+
+Review the whole inventory, package and definition digests, suite bindings, and
+exact text/binary downloads before checking confirmation and choosing **Activate**.
+Activation and restart compile the retained bytes with no registry/cache resolver;
+a later working-file edit cannot change that instance. Deterministic provider,
+mode, digest and state checks happen before retiring a predecessor. Flow packages
+refuse at a zero operator ceiling. Activation itself does not run an agent; use
+the existing explicit workflow/document controls after fresh inspection.
+
+Each activation creates fresh SharedSpace/Sessions/Canvas state from the reviewed
+seeds. A predecessor must have settled work: finish/reject/cancel/reconcile queued,
+uncertain or undecided work first. Activation never settles native effects or
+silently cancels work. Successful retirement makes the predecessor read-only, with
+reciprocal stable links. Its accepted bytes/revision/digests, proposals, history,
+flows and recorded native evidence remain available without reopening its engine
+or reconstructing a new proof. Normal writable reopen refuses the durable seal.
+No documents, proposals, approvals, budgets or Sessions IDs carry over. Future
+carry-over must explicitly create new reviewed proposals; no import action exists.
+
+A lost activation reply retains the exact candidate, predecessor and request key.
+Inspect the catalog; only explicit same-request **Continue activation** may resume
+pending startup. A pending restart never retries automatically or mints a new
+instance. If activation committed but this bridge did not observe the result,
+reopen the panel for the recorded active instance. Failure after a durable seal
+keeps the predecessor read-only and the reserved successor pending; it never
+unseals or falls back to mutable source. Missing/corrupt retained bytes refuse.
+No archive/package cleanup or migration occurs automatically.
+
+These clicks and labels remain local unverified attribution—not authentication,
+human-only containment, hosted identity or real-action qualification. There is no
+activation CLI command or agent-callable activation/decision tool.
 
 ## Load the separate extension
 

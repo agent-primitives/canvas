@@ -144,6 +144,11 @@ func serve(ctx context.Context, args []string, output io.Writer) error {
 	if private, err = privateStateDir(private); err != nil {
 		return err
 	}
+	for _, path := range []string{private, filepath.Join(private, "canvas")} {
+		if err := canvas.CheckWritable(path); err != nil {
+			return err
+		}
+	}
 	modeBinding, err := checkRuntimeMode(private, *fixture)
 	if err != nil {
 		return err

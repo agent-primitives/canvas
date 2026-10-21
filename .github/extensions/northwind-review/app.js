@@ -3,7 +3,7 @@ const token = new URLSearchParams(location.hash.slice(1)).get('token');
 history.replaceState(null, '', location.pathname);
 let state, demo, selected = '', view, documentKey = '', actionKey = '', pendingRun = '', busy = false, refreshing = false, online = false, refreshPromise;
 let selectionGeneration = 0, inspected = '', reopen = false, outcomeKey = '', actionError = '';
-let flowUI, flowRecordKey = '';
+let flowUI, flowRecordKey = '', initialized = false;
 const inspectionKey = () => `${selectionGeneration}:${selected}:${flowUI?.key() || ''}`;
 function setText(id, text) { if ($(id).textContent !== text) $(id).textContent = text; }
 function announce(message) { setText('status', message); }
@@ -206,7 +206,7 @@ async function render(generation) {
   $('snapshot').hidden = !view; $('snapshot').textContent = view?.snapshot?.content || '';
   $('evidence').textContent = view ? JSON.stringify(view, null, 2) : 'No action requested.';
   setText('draft-proof', !remoteSessions() && run()?.proof ? proofLabel(run().proof) : '');
-  $('meter').textContent = remoteSessions() ? 'Remote model/executor counts are unknown. Replay diagnostics are not reported by this host.' : demo.mode === 'deterministic-northwind' ? `Fixture provider calls this boot: ${demo.providerCalls}. Real model calls: 0.` : `Provider invocations this boot: ${demo.providerInvocations}. Completion-token ceiling: ${demo.completionTokenCeiling}. Not a billing ledger.`;
+  $('meter').textContent = remoteSessions() ? 'Remote model/executor counts are unknown. Replay diagnostics are not reported by this host.' : ['deterministic-northwind', 'deterministic-template'].includes(demo.mode) ? `Fixture provider calls this boot: ${demo.providerCalls}. Real model calls: 0.` : `Provider invocations this boot: ${demo.providerInvocations}. Completion-token ceiling: ${demo.completionTokenCeiling}. Not a billing ledger.`;
   stage(); flowUI?.renderStatus(view);
   const nextOutcome = JSON.stringify([selected, p?.status, view?.status, view?.concluded, pendingRun, flowUI?.key()]);
   if (nextOutcome !== outcomeKey) {
@@ -223,6 +223,17 @@ function refresh() {
   refreshPromise = (async () => {
     refreshing = true; controls();
     try {
+      if (!initialized) {
+        demo = await api('/api/demo');
+        if (demo.authoring) {
+          const { setupActivation } = await import('/activation.js');
+          await setupActivation({ api, demo, reload: () => { location.hash = `token=${token || ''}`; location.reload(); }, showRuntime: visible => { $('runtime-panel').hidden = !visible; } });
+        }
+        initialized = true;
+      }
+      // Establish the mode before any runtime read, including recovery from a
+      // failed bootstrap. An inert authoring shell has no runtime to inspect.
+      if (demo.authoring && !demo.activeInstance) { $('offline').hidden = true; return; }
       // A selection made during held reads owns a new inspection, never the old bytes.
       let complete = false;
       while (!complete) {
@@ -237,6 +248,7 @@ function refresh() {
     } catch (error) {
       online = false; inspected = ''; outcomeKey = ''; clearConfirmations(); documentKey = ''; actionKey = '';
       reopen = error.recovery === 'reopen'; $('offline').hidden = false;
+      if (reopen) document.dispatchEvent(new Event('canvas-reopen'));
       const recovery = reopen ? 'Last known record. Reopen this installed canvas to renew the view. Refresh cannot recover an engine restart or lost capability.' : 'Last known record. Engine unavailable or view invalid. Check the engine, then Refresh connection. If it restarted or the address changed, reopen this installed canvas.';
       setText('connection', recovery);
       announce(actionError || (['UNAUTHENTICATED', 'PERMISSION_DENIED'].includes(error.code) ? error.message : 'Connection lost. Reconnect before relying on the retained record or making another decision.'));
@@ -289,5 +301,6 @@ for (const [id, approved] of [['approve', true], ['deny', false]]) $(id).onclick
 $('continue').onclick = () => action(() => api('/api/announcement/continue', { id: view.id, role: reviewRole(), confirmation: { ...view.confirmation, confirmed: true } }), 'action-confirm');
 $('verify').onclick = () => action(() => api('/api/verify', { run: run().id }));
 $('verify-action').onclick = () => action(async () => { $('action-proof').textContent = proofLabel(await api('/api/announcement/verify', { id: view.id })); });
-clearConfirmations(); controls(); refresh();
+clearConfirmations(); controls();
+refresh();
 setInterval(() => { if (!busy && online) refresh(); }, 1500);

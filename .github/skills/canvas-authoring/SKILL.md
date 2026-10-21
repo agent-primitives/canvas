@@ -35,7 +35,10 @@ human. Copilot drafts configuration; it does not activate or approve Canvas.
 
 ## YAML rules
 
-- Use `apiVersion: canvas.local/v1alpha2`, `kind: Canvas` and string metadata.
+- Keep manual templates on `apiVersion: canvas.local/v1alpha2`, with `kind: Canvas`
+  and string metadata. For an explicitly requested declared workflow, use the
+  maintained v1alpha3 example and [flow contract](../../../docs/authoring-cli.md#compile-declared-flows-v1alpha3);
+  do not invent gate, input, retry or budget semantics.
 - `spec.documents` maps document IDs to paths/schemas. `spec.seed` maps document
   **paths** to seed-file paths. Schema, seed and layout paths are relative to the
   definition directory: no absolute paths, `..`, hidden components or symlinks.
@@ -69,7 +72,13 @@ review decisions for the human.
 Report changed paths, actual validation command/result, and the remaining human
 review step. Native file-diff review is **not engine-recorded setup acceptance**;
 valid offline is not authorization, model quality or deployment qualification.
-Stop here: no runtime start, engine write routes, approval/continuation, secrets,
+A person can separately prepare, inspect and activate a frozen package in the
+installed local panel; the agent must not perform that step. Activation creates a
+fresh seeded instance and a linked read-only predecessor, never implicit document
+or approval transfer. Later carry-over would require new reviewed proposals and
+is not available here.
+Stop here: no runtime start, prepare/activate HTTP calls, engine write routes,
+approval/continuation, secrets,
 plugin/MCP installation or permission-setting changes. Instructions do not
 sandbox normal tools; keep the host's existing permission prompts.
 

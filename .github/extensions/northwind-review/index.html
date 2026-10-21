@@ -5,6 +5,18 @@
 <header><p class="eyebrow">Canvas engine · local demonstration</p><h1 id="canvas-title">Northwind review</h1><p id="engine-description">Deterministic fixture. Nothing is sent or published.</p></header>
 <main>
 <p id="identity" class="notice">Identity: unauthenticated (prototype). These controls do not establish human-only authority.</p>
+<section id="activation-panel" hidden aria-labelledby="activation-title">
+<h2 id="activation-title">Frozen draft setup and history</h2>
+<p>Local person (unverified) is attribution, not authentication or human-only containment. Activation starts a fresh instance from the reviewed seeds; documents and approvals are not transferred.</p>
+<p id="activation-current"></p><p id="activation-status" role="status"></p>
+<label for="activation-definition">Draft definition relative to the operator draft root</label><input id="activation-definition" value="flow.yaml">
+<button id="activation-prepare">Prepare frozen package</button><button id="activation-inspect" class="secondary">Inspect catalog</button>
+<pre id="activation-package" tabindex="0" aria-label="Frozen package identity, files and digests"></pre><div id="activation-files"></div>
+<label><input id="activation-confirm" type="checkbox" disabled>I reviewed this whole frozen package, all files and suite pins.</label>
+<button id="activation-activate" disabled>Activate reviewed package</button><button id="activation-continue" hidden>Continue exact activation request</button>
+<label for="activation-history">Read-only instance history</label><select id="activation-history"><option value="">Current instance</option></select><nav id="activation-links" aria-label="Instance links"></nav><pre id="activation-archive" tabindex="0"></pre>
+</section>
+<div id="runtime-panel">
 <div class="toolbar"><button id="draft">New writer draft</button><button id="flow-open" hidden disabled>Run on a topic</button><button id="refresh" class="secondary">Refresh connection</button></div>
 <p id="connection" role="status" aria-live="polite">Connecting to the local engine…</p>
 <p id="status" role="status" aria-live="polite" aria-atomic="true"></p>
@@ -48,5 +60,6 @@
 <details id="run-evidence"><summary>Run evidence and diagnostics</summary><h3>Replay integrity</h3><button id="verify" class="secondary">Verify draft replay</button><p id="draft-proof" role="status"></p>
 <details id="release-evidence" hidden><summary>Released suite version and evaluation</summary><div id="suite-evidence"></div></details>
 <p id="meter" class="hint"></p></details>
+</div>
 </main><script type="module" src="/app.js"></script>
 </body></html>

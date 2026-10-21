@@ -3,7 +3,9 @@
 The repository skill [canvas-authoring](../.github/skills/canvas-authoring/SKILL.md)
 teaches the Canvas engine's YAML, local templates and offline validator. It does
 not create a Copilot canvas UI extension; Copilot's built-in `/create-canvas` is a
-different feature. There is no MCP server, plugin bundle, new tool or runtime.
+different feature. The installed review panel offers a separate explicit frozen
+activation path below; no MCP server, plugin bundle or agent-callable activation
+tool is supplied.
 
 ## Use the repository skill
 
@@ -39,8 +41,24 @@ to run. See the [CLI contract](authoring-cli.md) and
 
 Native Copilot app discovery and Changes behavior must be checked in the actual
 app/environment; CLI checks and agent exercises alone do not qualify that UI.
-For a **separate, deliberate** local runtime/review exercise after setup review,
-follow [Your first review canvas](your-first-review-canvas.md).
+For a **separate, deliberate** operator-started runtime/review exercise after setup
+review, follow [Your first review canvas](your-first-review-canvas.md).
+
+## Human activation of the frozen package
+
+The local operator may instead start the installed review panel's inactive
+[authoring shell](copilot-review.md#freeze-review-and-activate-a-draft). Copilot
+continues to draft/bind/validate files only. A person explicitly prepares a frozen
+candidate, inspects its complete inventory and exact retained files, then confirms
+and activates that package in the panel. Native Changes review alone is not that
+activation, and an active runtime never watches or hot-reloads the working draft.
+
+Activation creates a fresh instance from the reviewed seeds. The predecessor is
+retained read-only with links in both directions; accepted documents, approvals,
+attempts and Sessions identities are not transferred. Later document carry-over
+would be a separate explicit action creating new reviewed proposals, not inherited
+acceptance. No such carry-over action is provided. Local labels and confirmations
+are unverified prototype attribution, not sign-in or human-only containment.
 
 GitHub references: [app customization](https://docs.github.com/en/copilot/how-tos/github-copilot-app/customize-github-copilot-app),
 [agent skills](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/create-skills)

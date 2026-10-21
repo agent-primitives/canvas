@@ -472,6 +472,24 @@ func TestPackageBoundsEmptyDirectoryTraversal(t *testing.T) {
 	}
 }
 
+func TestPackageCompilerRefusesNonLocalDefinition(t *testing.T) {
+	parent := t.TempDir()
+	draft := filepath.Join(parent, "draft")
+	if _, err := Init(sourceCheckout(t), draft, "single-review", "local-only"); err != nil {
+		t.Fatal(err)
+	}
+	staging := filepath.Join(parent, "staging")
+	if err := os.Mkdir(staging, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := compilePackage(staging, "../draft/canvas.yaml"); !errors.Is(err, ErrPackage) {
+		t.Fatalf("compiler accepted a definition outside its supplied root: %v", err)
+	}
+	if _, _, err := compilePackage(parent, "draft/canvas.yaml"); err != nil {
+		t.Fatalf("valid nested definition refused: %v", err)
+	}
+}
+
 func TestPackageRefusesDisjointAndUnsafeReads(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "draft")
 	if _, err := Init(sourceCheckout(t), root, "single-review", "frozen"); err != nil {

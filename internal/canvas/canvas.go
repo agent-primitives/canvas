@@ -139,6 +139,8 @@ type Canvas struct {
 	reviewAuthorizer ReviewAuthorizer
 	definition       *CompiledDefinition
 	mu               sync.Mutex
+	// activeExecutions is runtime-only and mu-guarded, including final bookkeeping.
+	activeExecutions int
 	publicationMu    sync.Mutex
 	// inputHeads is scanMu-owned and deliberately empty after restart: validated
 	// source checkpoints must reconcile independently of durable intent dedupe.
@@ -169,6 +171,9 @@ type Canvas struct {
 }
 
 func openCanvas(root string, space sharedspace.SharedSpace, cl *client.Client, address string, bundles []contract.Bundle, binder contract.ContractBinder, triggers []Trigger, definition *CompiledDefinition) (*Canvas, error) {
+	if err := CheckWritable(root); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(root, 0700); err != nil {
 		return nil, errors.New("cannot create private canvas state")
 	}
@@ -471,6 +476,14 @@ func (c *Canvas) persistenceFailureLocked(a *attempt) {
 }
 func (c *Canvas) execute(id string) {
 	defer c.wg.Done()
+	c.mu.Lock()
+	c.activeExecutions++
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		c.activeExecutions--
+		c.mu.Unlock()
+	}()
 	select {
 	case c.sem <- struct{}{}:
 		defer func() { <-c.sem }()

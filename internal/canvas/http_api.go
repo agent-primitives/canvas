@@ -42,6 +42,16 @@ type apiState struct {
 	Errors        []string                 `json:"errors"`
 }
 
+func projectAPIState(state State) apiState {
+	return apiState{
+		Actions: state.Actions, Announcements: state.Announcements,
+		Definition: state.Definition, Agents: state.Agents, People: state.People,
+		Documents: state.Documents, Head: state.Head, Runs: state.Runs,
+		Proposals: state.Proposals, History: state.History,
+		Triggers: state.Triggers, Errors: state.Errors,
+	}
+}
+
 func (c *Canvas) registerAPIRoutes(mux *http.ServeMux, generic bool) {
 	c.registerFlowRoutes(mux)
 	handle := func(pattern string, next http.HandlerFunc) {
@@ -63,13 +73,7 @@ func (c *Canvas) registerAPIRoutes(mux *http.ServeMux, generic bool) {
 			sendJSON(w, 200, state)
 			return
 		}
-		sendJSON(w, 200, apiState{
-			Actions: state.Actions, Announcements: state.Announcements,
-			Definition: state.Definition, Agents: state.Agents, People: state.People,
-			Documents: state.Documents, Head: state.Head, Runs: state.Runs,
-			Proposals: state.Proposals, History: state.History,
-			Triggers: state.Triggers, Errors: state.Errors,
-		})
+		sendJSON(w, 200, projectAPIState(state))
 	})
 	handle("GET /api/document", func(w http.ResponseWriter, r *http.Request) {
 		doc, err := c.Document(r.URL.Query().Get("path"), r.URL.Query().Get("proposal"))

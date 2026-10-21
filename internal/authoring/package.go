@@ -396,6 +396,9 @@ func writePackageTree(root string, files map[string][]byte) error {
 	return nil
 }
 func compilePackage(root, definition string) (string, string, error) {
+	if !filepath.IsLocal(definition) || !packagePath(definition) {
+		return "", "", ErrPackage
+	}
 	compiled, err := canvas.LoadGenericDefinition(filepath.Join(root, filepath.FromSlash(definition)))
 	if err != nil {
 		return "", "", ErrPackage
@@ -487,7 +490,7 @@ func syncPackageDirs(root string) error {
 }
 
 func (s *Packages) verified(id string) (Package, map[string][]byte, error) {
-	if !validHash(id) || unlinked(s.privateRoot) != nil {
+	if !filepath.IsLocal(id) || !validHash(id) || unlinked(s.privateRoot) != nil {
 		return Package{}, nil, ErrPackage
 	}
 	directory := filepath.Join(s.privateRoot, id)
