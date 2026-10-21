@@ -484,7 +484,7 @@ func (c *Canvas) flowEditPauseLocked(f *flowRunRecord) string {
 			}
 			return "edited"
 		}
-		if (e.State == "rejected" || e.State == "failed" || e.State == "abandoned" || e.State == "stale") && e.Commands["resume"] == "" {
+		if (e.State == "rejected" || e.State == "failed" || e.State == "abandoned" || e.State == "stale") && (e.Commands["resume"] == "" || e.ResumePending) {
 			return "edit-paused"
 		}
 		return ""

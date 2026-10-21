@@ -332,9 +332,11 @@ func (c *Canvas) dispatchFlowLocked(ctx context.Context, id string, trigger shar
 	r.Generation++
 	a.FlowGeneration = r.Generation
 	r.Generations = append(r.Generations, flowGeneration{Number: r.Generation, Previous: previous, Step: s.ID, Attempt: a.ID})
+	var completingEdits []string
 	for _, cp := range r.EditCheckpoints {
 		if cp.RestartGeneration == r.Generation {
-			if edit := c.editLocked(cp.Edit); edit != nil {
+			if edit := c.editLocked(cp.Edit); edit != nil && edit.RerunPending {
+				completingEdits = append(completingEdits, edit.ID)
 				edit.RerunPending = false
 			}
 		}
@@ -352,6 +354,9 @@ func (c *Canvas) dispatchFlowLocked(ctx context.Context, id string, trigger shar
 	a.Order = uint64(len(c.data.Attempts) + 1)
 	c.data.Attempts = append(c.data.Attempts, a)
 	if err = c.saveLocked(); err != nil {
+		for _, edit := range completingEdits {
+			c.editLocked(edit).RerunPending = true
+		}
 		c.persistenceFailureLocked(c.findLocked(a.ID))
 		live = c.flowLocked(id)
 		live.State = "uncertain"

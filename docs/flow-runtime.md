@@ -59,6 +59,21 @@ parked work/effects block rerun, and a local tombstone is not proof of settlemen
 Revoking an affected in-flow parked action may also block later flow starts or
 retirement; this pin provides no safe native cancellation shortcut.
 
+Before a rerun reserves a restart or another attempt, the superseded ordinary
+attempt must have exact owned native END evidence or a durable final record
+proving that dispatch never occurred. A session ID, an empty native log, or a
+released worker semaphore is not settlement. Unknown Create/Exec outcomes may
+therefore keep the flow blocked at this pin. An explicit Resume of proven
+pre-execution suppression restores a paused gate; it does not dispatch work.
+A separate explicit Retry is required to run the ordinary step.
+
+Resume release remains pending until its ledger write succeeds. A failed write
+keeps the effective edit pause, and exact continuation must retry persistence.
+A completed matching Resume or rerun only reports the current flow: it never
+releases a later edit's pause or dispatches again, including after cancellation.
+Reopening a pending Resume preserves the edit pause for explicit continuation;
+ordinary reopened review gates still require explicit reconciliation.
+
 The local HTTP surface is `GET /api/edits`, `/api/edit`, `/api/edit/context` and
 `POST /api/edit/request`, `/reconcile`, `/abandon`, `/resume`, `/rerun` (all POST
 suffixes under `/api/edit`). Review still uses `/api/review`. Requests bind the

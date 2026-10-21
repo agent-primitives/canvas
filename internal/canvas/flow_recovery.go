@@ -43,7 +43,12 @@ func (c *Canvas) claimFlowDispatchStageLocked(a *attempt, stage string) bool {
 		return true
 	}
 	f := c.flowLocked(a.FlowRun)
-	if f != nil && (f.State == "edited" || f.State == "edit-paused") {
+	if f != nil && (f.State != "running" && f.State != "editing" || c.flowEditPauseLocked(c.flowRecordLocked(f.ID)) != "") && !c.flowRecordLocked(f.ID).CancelRequested {
+		// Session creation is not execution. Record the refused pre-Exec
+		// claim in its existing journal before the worker can finish.
+		if stage == "exec-intent" && a.FlowStage == "create-intent" {
+			a.FlowStage = "edit-suppressed"
+		}
 		return false
 	}
 	if !c.flowGenerationCurrentLocked(f, a) {
