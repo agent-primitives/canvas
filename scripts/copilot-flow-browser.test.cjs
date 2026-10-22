@@ -235,6 +235,50 @@ test('document edit real engine restart and fresh bridge reopen recover a retain
   assert.deepEqual(p.errors, []);
 });
 
+async function editReviewReady(p) {
+  await p.frame.locator('#edit-detail').filter({ hasText: '"state": "proposal"' }).waitFor();
+  // /api/edits can observe publication after this refresh's /api/state read.
+  // Wait for the proposal document, not just the newer edit record.
+  await p.frame.locator('#documents > details').waitFor();
+  await p.ready();
+}
+
+test('edit document readiness waits for the proposal view after a split state/edit snapshot', async t => {
+  const p = await flowPanel(t); await p.ready();
+  const before = await p.api('/api/state');
+  // Retain a real earlier state snapshot while the independent edits read can
+  // observe publication. This is the ordering seen before the CI assertion.
+  await p.page.route(p.bridge.origin + '/api/state', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify(before)
+  }));
+  await p.frame.locator('#edit-kind').selectOption('json-pointer');
+  await p.frame.locator('#edit-pointer').fill('/title');
+  await p.frame.locator('#edit-instruction').fill('Revise this fictional title across split read snapshots.');
+  await p.frame.locator('#edit-confirm:not(:disabled)').check();
+  await p.frame.locator('#edit-request:not(:disabled)').click();
+  await p.frame.getByText('Edit record', { exact: true }).click();
+  await p.frame.locator('#edit-detail').filter({ hasText: '"state": "proposal"' }).waitFor();
+  await p.ready();
+  const edit = (await p.api('/api/edits')).edits[0];
+  assert.equal((await p.api('/api/state')).proposals[0].id, edit.proposal);
+  assert.equal(await p.frame.locator('#documents > details').count(), 0);
+  assert.equal(await p.frame.locator('#document-confirm').isDisabled(), true, 'a newer edit record alone is not document-review readiness');
+  assert.equal((await p.api('/api/state')).head, before.head);
+
+  await p.page.unroute(p.bridge.origin + '/api/state');
+  await editReviewReady(p);
+  assert.equal(await p.frame.locator('#document-confirm').isDisabled(), false);
+  assert.equal(await p.frame.locator('#proposal').inputValue(), edit.proposal);
+  assert.equal(await p.frame.locator('#documents > details').count(), 1);
+  assert.match(await p.frame.locator('#scope').textContent(), /Whole-proposal scope: prd.json/);
+  assert.equal(await p.frame.locator('#document-confirm').isChecked(), false);
+  assert.equal(await p.frame.locator('#accept').isDisabled(), true, 'rendered evidence does not replace human confirmation');
+  assert.equal((await p.api('/api/state')).head, before.head);
+  assert.equal((await p.api('/api/demo')).providerCalls, 1);
+  assert.deepEqual(p.posts.map(post => post.path), ['/api/edit/request'], 'readiness never retries or accepts');
+  assert.deepEqual(p.errors, []);
+});
+
 test('document edit app blocks review after a lost real Reconcile reply until exact continuation', async t => {
   const p = await flowPanel(t); await p.ready();
   const actualFrame = () => p.page.frames().find(frame => frame.url().startsWith(p.bridge.origin));
@@ -246,7 +290,7 @@ test('document edit app blocks review after a lost real Reconcile reply until ex
   await p.frame.locator('#edit-confirm:not(:disabled)').check();
   await p.frame.locator('#edit-request:not(:disabled)').click();
   await p.frame.getByText('Edit record', { exact: true }).click();
-  await p.frame.locator('#edit-detail').filter({ hasText: '"state": "proposal"' }).waitFor(); await p.ready();
+  await editReviewReady(p);
   const original = (await p.api('/api/edits')).edits[0], native = p.nativeHistory();
   assert.equal(await p.frame.locator('#document-confirm').isDisabled(), false);
   let loseReply = true;
