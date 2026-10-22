@@ -7,7 +7,7 @@ toolchain go1.27.3
 require (
 	github.com/agent-primitives/sessions v0.2.1-0.20261019224537-f18a2cb1454d
 	github.com/agent-primitives/sessions/integrations/substrate v0.0.0-20261019224537-f18a2cb1454d
-	github.com/agent-primitives/suite v0.6.0
+	github.com/agent-primitives/suite v0.7.0
 	github.com/agent-substrate/substrate v0.4.1-0.20261013053953-96dffb287919
 	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/google/jsonschema-go v0.4.3

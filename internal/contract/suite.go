@@ -16,7 +16,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
+	"github.com/agent-primitives/suite/oci"
 )
 
 const maxArchive = 8 << 20
@@ -34,13 +35,13 @@ type SuiteRef struct {
 	Member         string `yaml:"member" json:"member"`
 }
 type SuiteIdentity struct {
-	Release       *ReleaseIdentity                  `json:"release,omitempty"`
-	Digest        string                            `json:"digest"`
-	ContentDigest string                            `json:"contentDigest"`
-	GraphDigest   string                            `json:"graphDigest"`
-	Member        string                            `json:"member"`
-	MemberDigest  string                            `json:"memberDigest"`
-	Compositions  []agentsuite.CompositionSelection `json:"compositions"`
+	Release       *ReleaseIdentity            `json:"release,omitempty"`
+	Digest        string                      `json:"digest"`
+	ContentDigest string                      `json:"contentDigest"`
+	GraphDigest   string                      `json:"graphDigest"`
+	Member        string                      `json:"member"`
+	MemberDigest  string                      `json:"memberDigest"`
+	Compositions  []core.CompositionSelection `json:"compositions"`
 }
 
 // Clone keeps presentation and historical metadata from sharing mutable selections.
@@ -57,7 +58,7 @@ func (s *SuiteIdentity) Clone() *SuiteIdentity {
 		}
 		copy.Release = &release
 	}
-	copy.Compositions = append([]agentsuite.CompositionSelection(nil), s.Compositions...)
+	copy.Compositions = append([]core.CompositionSelection(nil), s.Compositions...)
 	return &copy
 }
 
@@ -254,9 +255,9 @@ func copiedView(root string, files map[string]retainedFile) error {
 	}
 	return nil
 }
-func validateRetained(a executionArchive) (*SuiteIdentity, agentsuite.Agent, string, error) {
-	var agent agentsuite.Agent
-	if !namePattern.MatchString(a.ID) || !agentsuite.IsValidDigest(a.Pin) || checkRetained(a) != nil {
+func validateRetained(a executionArchive) (*SuiteIdentity, core.Agent, string, error) {
+	var agent core.Agent
+	if !namePattern.MatchString(a.ID) || !core.IsValidDigest(a.Pin) || checkRetained(a) != nil {
 		return nil, agent, "", errSuite
 	}
 	temp, err := os.MkdirTemp("", "canvas-suite-")
@@ -268,35 +269,35 @@ func validateRetained(a executionArchive) (*SuiteIdentity, agentsuite.Agent, str
 	if copiedView(before, a.Directory) != nil || copiedView(after, a.Artifact) != nil {
 		return nil, agent, "", errSuite
 	}
-	report, err := agentsuite.ValidateDirectory(before)
+	report, err := oci.ValidateDirectory(before)
 	if err != nil {
 		return nil, agent, "", errSuite
 	}
-	diff, err := agentsuite.DiffPaths(before, after)
+	diff, err := oci.DiffPaths(before, after)
 	if err != nil || diff.Before.SourceType != "directory" || diff.Before.ArtifactDigest != "" || diff.After.SourceType != "oci-layout" || diff.After.ArtifactDigest != a.Pin || diff.Before.ContentDigest != diff.After.ContentDigest {
 		return nil, agent, "", errSuite
 	}
-	var suite agentsuite.Suite
+	var suite core.Suite
 	raw := a.Directory["agentsuite.json"].Data
-	if agentsuite.Unmarshal(raw, &suite) != nil || len(suite.Agents) != 1 || len(suite.Extensions) != 0 || len(suite.Capabilities) != 0 || report.ToolProviders != 0 || report.ToolProviderCompositions != 0 {
+	if core.Unmarshal(raw, &suite) != nil || len(suite.Agents) != 1 || len(suite.Extensions) != 0 || len(suite.Capabilities) != 0 || report.ToolProviders != 0 || report.ToolProviderCompositions != 0 {
 		return nil, agent, "", errSuite
 	}
 	member := suite.Agents[0]
-	if member.ID != a.Member || !agentsuite.MatchesCanonicalDescriptor(a.Directory[member.Path].Data, member.Descriptor) || agentsuite.Unmarshal(a.Directory[member.Path].Data, &agent) != nil {
+	if member.ID != a.Member || !core.MatchesCanonicalDescriptor(a.Directory[member.Path].Data, member.Descriptor) || core.Unmarshal(a.Directory[member.Path].Data, &agent) != nil {
 		return nil, agent, "", errSuite
 	}
 	if agent.ID != member.ID || !modelOnlyAgent(agent) {
 		return nil, agent, "", errSuite
 	}
 	instruction := a.Directory[agent.Instructions.Path].Data
-	if agent.Instructions.Descriptor.MediaType != agentsuite.MediaTypeInstructions || !agentsuite.DescriptorSizeAndDigestMatch(instruction, agent.Instructions.Descriptor) || len(instruction) == 0 || len(instruction) > 65536 || !utf8.Valid(instruction) {
+	if agent.Instructions.Descriptor.MediaType != core.MediaTypeInstructions || !core.DescriptorSizeAndDigestMatch(instruction, agent.Instructions.Descriptor) || len(instruction) == 0 || len(instruction) > 65536 || !utf8.Valid(instruction) {
 		return nil, agent, "", errSuite
 	}
-	graph, err := agentsuite.Digest(raw)
+	graph, err := core.Digest(raw)
 	if err != nil {
 		return nil, agent, "", errSuite
 	}
-	selected := make([]agentsuite.CompositionSelection, 0, len(report.CompositionSelections))
+	selected := make([]core.CompositionSelection, 0, len(report.CompositionSelections))
 	for _, s := range report.CompositionSelections {
 		if s.Agent == member.ID {
 			selected = append(selected, s)
@@ -307,7 +308,7 @@ func validateRetained(a executionArchive) (*SuiteIdentity, agentsuite.Agent, str
 	}
 	return &SuiteIdentity{Digest: a.Pin, ContentDigest: diff.Before.ContentDigest, GraphDigest: graph, Member: member.ID, MemberDigest: member.Descriptor.Digest, Compositions: selected}, agent, string(instruction), nil
 }
-func modelOnlyAgent(agent agentsuite.Agent) bool {
+func modelOnlyAgent(agent core.Agent) bool {
 	return agent.Model.Protocol == "openai-compatible" && boundedModel(agent.Model.Model) && len(agent.Model.SecretRefs) == 0 && agent.Model.EndpointEnv == "" && len(agent.ToolProviders) == 0 && len(agent.Invokes) == 0 && len(agent.Extensions) == 0
 }
 func boundedModel(model string) bool {

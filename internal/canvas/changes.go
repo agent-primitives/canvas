@@ -4,7 +4,7 @@ import (
 	"errors"
 	"unicode/utf8"
 
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
 )
 
 const maxProposalChanges = 32
@@ -60,7 +60,7 @@ func (d *CompiledDefinition) Changes(agent, output string) (map[string]string, e
 			Content   *string `json:"content"`
 		} `json:"changes"`
 	}
-	if agentsuite.Unmarshal([]byte(output), &envelope) != nil || len(envelope.Changes) == 0 || len(envelope.Changes) > maxProposalChanges {
+	if core.Unmarshal([]byte(output), &envelope) != nil || len(envelope.Changes) == 0 || len(envelope.Changes) > maxProposalChanges {
 		return nil, errors.New("invalid bounded change envelope")
 	}
 	result := map[string]string{}

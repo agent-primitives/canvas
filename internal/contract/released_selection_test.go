@@ -12,10 +12,10 @@ import (
 	"strings"
 	"testing"
 
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
 )
 
-func repackedRelease(t *testing.T, mutate func(map[string]retainedFile, *agentsuite.Suite)) SuiteRef {
+func repackedRelease(t *testing.T, mutate func(map[string]retainedFile, *core.Suite)) SuiteRef {
 	t.Helper()
 	ref := releasedNorthwind(t)
 	files, err := capture(ref.Layout)
@@ -26,12 +26,12 @@ func repackedRelease(t *testing.T, mutate func(map[string]retainedFile, *agentsu
 	if err != nil {
 		t.Fatal(err)
 	}
-	var suite agentsuite.Suite
-	if agentsuite.Unmarshal(content["agentsuite.json"].Data, &suite) != nil {
+	var suite core.Suite
+	if core.Unmarshal(content["agentsuite.json"].Data, &suite) != nil {
 		t.Fatal("suite")
 	}
 	mutate(content, &suite)
-	raw, err := agentsuite.Marshal(suite)
+	raw, err := core.Marshal(suite)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,8 +62,8 @@ func repackedRelease(t *testing.T, mutate func(map[string]retainedFile, *agentsu
 	}
 	config := []byte(`{}`)
 	layer := buffer.Bytes()
-	cfgDesc, layerDesc := descriptor(config, agentsuite.MediaTypeEmptyConfig), descriptor(layer, agentsuite.MediaTypeContent)
-	manifest, _ := json.Marshal(releaseManifest{SchemaVersion: 2, MediaType: releaseManifestType, ArtifactType: agentsuite.MediaTypeArtifact, Config: cfgDesc, Layers: []releaseDescriptor{layerDesc}})
+	cfgDesc, layerDesc := descriptor(config, core.MediaTypeEmptyConfig), descriptor(layer, core.MediaTypeContent)
+	manifest, _ := json.Marshal(releaseManifest{SchemaVersion: 2, MediaType: releaseManifestType, ArtifactType: core.MediaTypeArtifact, Config: cfgDesc, Layers: []releaseDescriptor{layerDesc}})
 	manifestDesc := descriptor(manifest, releaseManifestType)
 	index, _ := json.Marshal(releaseIndex{SchemaVersion: 2, Manifests: []releaseDescriptor{manifestDesc}})
 	artifact := map[string]retainedFile{"oci-layout": {Data: []byte(`{"imageLayoutVersion":"1.0.0"}`), Mode: 0600}, "index.json": {Data: index, Mode: 0600}}
@@ -78,7 +78,7 @@ func repackedRelease(t *testing.T, mutate func(map[string]retainedFile, *agentsu
 }
 
 func TestReleasedMultiMemberSelectionAndAmbiguityRefusal(t *testing.T) {
-	ref := repackedRelease(t, func(content map[string]retainedFile, suite *agentsuite.Suite) {
+	ref := repackedRelease(t, func(content map[string]retainedFile, suite *core.Suite) {
 		other := northwindRef(t, "reviewer")
 		files, err := capture(other.Artifact)
 		if err != nil {
@@ -88,8 +88,8 @@ func TestReleasedMultiMemberSelectionAndAmbiguityRefusal(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		var rs agentsuite.Suite
-		agentsuite.Unmarshal(reviewer["agentsuite.json"].Data, &rs)
+		var rs core.Suite
+		core.Unmarshal(reviewer["agentsuite.json"].Data, &rs)
 		for name, file := range reviewer {
 			if name != "agentsuite.json" {
 				content[name] = file
@@ -107,7 +107,7 @@ func TestReleasedMultiMemberSelectionAndAmbiguityRefusal(t *testing.T) {
 	if b.Suite.Member != "reviewer" || b.Suite.Release.Platform != "linux/arm64" || len(b.Suite.Compositions) != 1 {
 		t.Fatal("selected wrong member or platform")
 	}
-	ambiguous := repackedRelease(t, func(_ map[string]retainedFile, suite *agentsuite.Suite) {
+	ambiguous := repackedRelease(t, func(_ map[string]retainedFile, suite *core.Suite) {
 		suite.Compositions = append(suite.Compositions, suite.Compositions[0])
 	})
 	if _, err := LoadReleasedSuite("alias", ambiguous, nil); err == nil {
@@ -116,22 +116,22 @@ func TestReleasedMultiMemberSelectionAndAmbiguityRefusal(t *testing.T) {
 }
 
 func TestReleasedForeignProfileRefusesWithExportUnavailable(t *testing.T) {
-	ref := repackedRelease(t, func(content map[string]retainedFile, suite *agentsuite.Suite) {
-		implementation := agentsuite.EvidenceImplementation{ID: "foreign-runtime", Version: "1.0.0", Digest: "sha256:" + strings.Repeat("a", 64)}
-		profile := agentsuite.RuntimeProfile{SchemaVersion: agentsuite.SpecVersion, MediaType: agentsuite.MediaTypeRuntimeProfile, ID: "foreign", Runtime: implementation, Harness: implementation, Renderer: implementation, ConfigurationABI: "foreign-abi", ImageRequired: true}
-		raw, _ := agentsuite.Marshal(profile)
-		digest, _ := agentsuite.Digest(raw)
+	ref := repackedRelease(t, func(content map[string]retainedFile, suite *core.Suite) {
+		implementation := core.EvidenceImplementation{ID: "foreign-runtime", Version: "1.0.0", Digest: "sha256:" + strings.Repeat("a", 64)}
+		profile := core.RuntimeProfile{SchemaVersion: core.SpecVersion, MediaType: core.MediaTypeRuntimeProfile, ID: "foreign", Runtime: implementation, Harness: implementation, Renderer: implementation, ConfigurationABI: "foreign-abi", ImageRequired: true}
+		raw, _ := core.Marshal(profile)
+		digest, _ := core.Digest(raw)
 		name := "runtime-profiles/foreign.json"
 		content[name] = retainedFile{Data: raw, Mode: 0644}
-		suite.RuntimeProfiles = []agentsuite.ManifestRef{{ID: "foreign", Path: name, Descriptor: agentsuite.Descriptor{MediaType: agentsuite.MediaTypeRuntimeProfile, Digest: digest, Size: int64(len(raw))}}}
+		suite.RuntimeProfiles = []core.ManifestRef{{ID: "foreign", Path: name, Descriptor: core.Descriptor{MediaType: core.MediaTypeRuntimeProfile, Digest: digest, Size: int64(len(raw))}}}
 		suite.Compositions = suite.Compositions[:1]
 		r := &suite.Compositions[0]
-		var c agentsuite.Composition
-		agentsuite.Unmarshal(content[r.Path].Data, &c)
+		var c core.Composition
+		core.Unmarshal(content[r.Path].Data, &c)
 		c.RuntimeProfile = "foreign"
 		r.RuntimeProfile = "foreign"
-		raw, _ = agentsuite.Marshal(c)
-		digest, _ = agentsuite.Digest(raw)
+		raw, _ = core.Marshal(c)
+		digest, _ = core.Digest(raw)
 		content[r.Path] = retainedFile{Data: raw, Mode: 0644}
 		r.Descriptor.Digest = digest
 		r.Descriptor.Size = int64(len(raw))
@@ -146,22 +146,22 @@ func TestReleasedForeignProfileRefusesWithExportUnavailable(t *testing.T) {
 func TestReleasedSelectedSecretAndMissingImageRefused(t *testing.T) {
 	for _, kind := range []string{"secret", "image"} {
 		t.Run(kind, func(t *testing.T) {
-			ref := repackedRelease(t, func(content map[string]retainedFile, suite *agentsuite.Suite) {
+			ref := repackedRelease(t, func(content map[string]retainedFile, suite *core.Suite) {
 				if kind == "secret" {
-					var agent agentsuite.Agent
-					agentsuite.Unmarshal(content[suite.Agents[0].Path].Data, &agent)
+					var agent core.Agent
+					core.Unmarshal(content[suite.Agents[0].Path].Data, &agent)
 					agent.Model.SecretRefs = []string{"unsupported-secret"}
-					raw, _ := agentsuite.Marshal(agent)
+					raw, _ := core.Marshal(agent)
 					content[suite.Agents[0].Path] = retainedFile{Data: raw, Mode: 0644}
 					sum := sha256.Sum256(raw)
 					suite.Agents[0].Descriptor.Digest = fmt.Sprintf("sha256:%x", sum)
 					suite.Agents[0].Descriptor.Size = int64(len(raw))
 				} else {
-					var build agentsuite.BuildProfile
+					var build core.BuildProfile
 					ref := &suite.BuildProfiles[0]
-					agentsuite.Unmarshal(content[ref.Path].Data, &build)
+					core.Unmarshal(content[ref.Path].Data, &build)
 					build.Harness = build.Harness[1:]
-					raw, _ := agentsuite.Marshal(build)
+					raw, _ := core.Marshal(build)
 					content[ref.Path] = retainedFile{Data: raw, Mode: 0644}
 					sum := sha256.Sum256(raw)
 					ref.Descriptor.Digest = fmt.Sprintf("sha256:%x", sum)

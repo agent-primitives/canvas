@@ -39,7 +39,7 @@ isolation/rollback limitations, and mock disclosure. These are transport/proof/
 export consistency fixtures, not model-quality or complete Northwind evaluations.
 
 The successful label is **evaluation consistent; unsigned**. It means that
-`agentsuite.VerifyEvaluation` matched the retained layout, independently reviewed
+`evidence.VerifyEvaluation` matched the retained layout, independently reviewed
 expectations, case/run coverage and passing claims. It does not establish who
 made those claims, whether observations were real, clock authenticity, freshness,
 Canvas runtime equivalence or deployment readiness. Replay is a different check.
@@ -57,9 +57,10 @@ Both select `linux/amd64`, the unprofiled/native composition, and its
 Orka runtime or this Canvas harness**. No associated images ran. The newly
 authored model is `northwind-mock`; the original Northwind model was not overridden.
 
-The library module is `github.com/agent-primitives/suite v0.4.0`; the authored
-schema version remains `1.0.0-draft`. Neither version is an artifact, graph,
-member, composition, build-profile, evidence or execution-archive digest.
+Canvas verifies these retained fixtures with
+`github.com/agent-primitives/suite v0.7.0`; the authored schema version remains
+`1.0.0-draft`. Neither version is an artifact, graph, member, composition,
+build-profile, evidence or execution-archive digest.
 
 Producer details:
 

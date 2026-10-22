@@ -10,23 +10,24 @@ import (
 	"os"
 	"strings"
 
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
+	"github.com/agent-primitives/suite/evidence"
 )
 
 // EvaluationInfo is a checked release claim, never proof of the current Canvas run.
 type EvaluationInfo struct {
-	Status          string                        `json:"status"`
-	Reason          string                        `json:"reason,omitempty"`
-	EvidenceDigest  string                        `json:"evidenceDigest,omitempty"`
-	ExpectedDigest  string                        `json:"expectedDigest,omitempty"`
-	Cases           int                           `json:"cases,omitempty"`
-	Runs            int                           `json:"runs,omitempty"`
-	CompletedAt     string                        `json:"completedAt,omitempty"`
-	Unsigned        bool                          `json:"unsigned"`
-	TestedExecution *agentsuite.EvidenceExecution `json:"testedExecution,omitempty"`
+	Status          string                      `json:"status"`
+	Reason          string                      `json:"reason,omitempty"`
+	EvidenceDigest  string                      `json:"evidenceDigest,omitempty"`
+	ExpectedDigest  string                      `json:"expectedDigest,omitempty"`
+	Cases           int                         `json:"cases,omitempty"`
+	Runs            int                         `json:"runs,omitempty"`
+	CompletedAt     string                      `json:"completedAt,omitempty"`
+	Unsigned        bool                        `json:"unsigned"`
+	TestedExecution *evidence.EvidenceExecution `json:"testedExecution,omitempty"`
 }
 
-func verifyReleaseEvaluation(layout string, a releasedArchive, manifest releaseDescriptor, identity *SuiteIdentity, agent agentsuite.Agent) EvaluationInfo {
+func verifyReleaseEvaluation(layout string, a releasedArchive, manifest releaseDescriptor, identity *SuiteIdentity, agent core.Agent) EvaluationInfo {
 	result := EvaluationInfo{Status: "not verified", Reason: "missing"}
 	digest := func(data []byte) string { sum := sha256.Sum256(data); return fmt.Sprintf("sha256:%x", sum) }
 	if len(a.Expected) > 0 {
@@ -42,13 +43,13 @@ func verifyReleaseEvaluation(layout string, a releasedArchive, manifest releaseD
 	if len(a.Expected) == 0 || len(a.Evidence) == 0 {
 		return result
 	}
-	var expected agentsuite.ExpectedEvaluation
-	if !validExpectedShape(a.Expected) || agentsuite.Unmarshal(a.Expected, &expected) != nil || expected.Judges == nil {
+	var expected evidence.ExpectedEvaluation
+	if !validExpectedShape(a.Expected) || core.Unmarshal(a.Expected, &expected) != nil || expected.Judges == nil {
 		result.Reason = "malformed"
 		return result
 	}
 	parts := strings.Split(a.Platform, "/")
-	platform := agentsuite.EvidencePlatform{}
+	platform := evidence.EvidencePlatform{}
 	if len(parts) >= 2 {
 		platform.OS = parts[0]
 		platform.Architecture = parts[1]
@@ -56,14 +57,14 @@ func verifyReleaseEvaluation(layout string, a releasedArchive, manifest releaseD
 	if len(parts) == 3 {
 		platform.Variant = parts[2]
 	}
-	selected := agentsuite.EvidenceSubject{Manifest: agentsuite.EvidenceDescriptor{MediaType: manifest.MediaType, Digest: a.Pin, Size: manifest.Size}, MemberID: a.Member, MemberDigest: identity.MemberDigest, CompositionDigest: identity.Release.CompositionDigest, BuildProfileDigest: identity.Release.BuildProfileDigest, Platform: platform}
+	selected := evidence.EvidenceSubject{Manifest: evidence.EvidenceDescriptor{MediaType: manifest.MediaType, Digest: a.Pin, Size: manifest.Size}, MemberID: a.Member, MemberDigest: identity.MemberDigest, CompositionDigest: identity.Release.CompositionDigest, BuildProfileDigest: identity.Release.BuildProfileDigest, Platform: platform}
 	if expected.Subject != selected || expected.Execution.Model.ID != agent.Model.Model || expected.Execution.Model.Protocol != agent.Model.Protocol {
 		result.Reason = "subject"
 		return result
 	}
-	verified, err := agentsuite.VerifyEvaluation(layout, expected, bytes.NewReader(a.Evidence))
+	verified, err := evidence.VerifyEvaluation(layout, expected, bytes.NewReader(a.Evidence))
 	if err != nil {
-		var refused *agentsuite.EvidenceRefusal
+		var refused *evidence.EvidenceRefusal
 		if errors.As(err, &refused) {
 			result.Reason = refused.Code
 		} else {
@@ -135,7 +136,7 @@ func readEvaluationFile(filename string) ([]byte, error) {
 // Strictly decode an independent expectation's outer shape, including explicit judges[].
 func validExpectedShape(data []byte) bool {
 	var fields map[string]json.RawMessage
-	if agentsuite.Unmarshal(data, &fields) != nil || len(fields) != 4 {
+	if core.Unmarshal(data, &fields) != nil || len(fields) != 4 {
 		return false
 	}
 	for _, name := range []string{"subject", "execution", "evaluator", "judges"} {

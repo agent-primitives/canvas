@@ -10,7 +10,7 @@ import (
 	"slices"
 
 	"github.com/agent-primitives/canvas/internal/sharedspace"
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
 )
 
 // Polling omits exact historical inputs and private command/reservation journals.
@@ -192,7 +192,7 @@ func (c *Canvas) registerFlowRoutes(mux *http.ServeMux) {
 func decodeFlowAction(w http.ResponseWriter, r *http.Request, limit int64, q any) bool {
 	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	var object map[string]json.RawMessage
-	if err != nil || agentsuite.Unmarshal(raw, &object) != nil || object == nil {
+	if err != nil || core.Unmarshal(raw, &object) != nil || object == nil {
 		sendJSON(w, 400, map[string]string{"error": "A bounded JSON flow request is required.", "code": "FLOW_INVALID"})
 		return false
 	}
