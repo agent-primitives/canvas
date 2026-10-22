@@ -51,8 +51,8 @@ func TestOldPinJournalMigratesAndReconstructsCompletedFork(t *testing.T) {
 	}
 	t.Cleanup(func() { h.Close() })
 	version, after := upgradeEvidence(t, path)
-	if version != 5 {
-		t.Fatalf("journal schema after host startup = %d, want 5", version)
+	if version != 6 {
+		t.Fatalf("journal schema after host startup = %d, want 6", version)
 	}
 	if !reflect.DeepEqual(before, after) {
 		t.Fatal("migration rewrote recorded evidence")
@@ -140,8 +140,11 @@ func TestForkPinNativeJournalVerifiesAndResumes(t *testing.T) {
 	}
 	t.Cleanup(func() { h.Close() })
 	version, after := upgradeEvidence(t, path)
-	if version != 5 || !reflect.DeepEqual(before, after) {
-		t.Fatal("opening schema-5 fork journal changed recorded evidence")
+	if version != 6 {
+		t.Fatalf("fork journal schema after host startup = %d, want 6", version)
+	}
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("migrating schema-5 fork journal changed recorded evidence")
 	}
 	c := connect(t, h)
 	for _, uid := range []string{completed, unanswered} {
