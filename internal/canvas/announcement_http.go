@@ -8,7 +8,7 @@ import (
 	"net/http"
 
 	"github.com/agent-primitives/canvas/internal/sessionclient"
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
 )
 
 type announcementRequest struct {
@@ -35,7 +35,7 @@ func (c *Canvas) announcementRoutes(mux *http.ServeMux, send func(http.ResponseW
 	mux.HandleFunc("POST /api/announcement/", func(w http.ResponseWriter, r *http.Request) {
 		raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<10))
 		var object map[string]json.RawMessage
-		if err != nil || agentsuite.Unmarshal(raw, &object) != nil || object == nil {
+		if err != nil || core.Unmarshal(raw, &object) != nil || object == nil {
 			send(w, 400, map[string]string{"error": "Invalid local announcement action."})
 			return
 		}

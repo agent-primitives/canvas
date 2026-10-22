@@ -12,7 +12,8 @@ import (
 	"syscall"
 	"testing"
 
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
+	"github.com/agent-primitives/suite/oci"
 )
 
 func suiteArchive(t *testing.T) (Bundle, executionArchive) {
@@ -33,7 +34,7 @@ func TestSuiteArchiveTamperingNeverTrusted(t *testing.T) {
 		t.Run(field, func(t *testing.T) {
 			candidate := b
 			identity := *b.Suite
-			identity.Compositions = append([]agentsuite.CompositionSelection{}, identity.Compositions...)
+			identity.Compositions = append([]core.CompositionSelection{}, identity.Compositions...)
 			candidate.Suite = &identity
 			switch field {
 			case "digest":
@@ -179,7 +180,7 @@ func TestDirectorySupplementAndSpecialFileRefusals(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "extra.json"), []byte(`{"fictional":true}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := agentsuite.ValidateDirectory(root); err != nil {
+	if _, err := oci.ValidateDirectory(root); err != nil {
 		t.Fatal("supplement must be otherwise conformant", err)
 	}
 	if _, err := LoadSuite("writer", ref); err == nil {
@@ -196,23 +197,23 @@ func TestDirectorySupplementAndSpecialFileRefusals(t *testing.T) {
 
 func TestSuiteModelOnlyPolicyRefusesUnsupportedFeatures(t *testing.T) {
 	_, archive := suiteArchive(t)
-	var agent agentsuite.Agent
-	if err := agentsuite.Unmarshal(archive.Directory["agents/writer.json"].Data, &agent); err != nil {
+	var agent core.Agent
+	if err := core.Unmarshal(archive.Directory["agents/writer.json"].Data, &agent); err != nil {
 		t.Fatal(err)
 	}
 	if !modelOnlyAgent(agent) {
 		t.Fatal("fixture is not model-only")
 	}
-	for _, mutate := range []func(*agentsuite.Agent){
-		func(a *agentsuite.Agent) { a.Model.Protocol = "other" },
-		func(a *agentsuite.Agent) { a.Model.Model = "" },
-		func(a *agentsuite.Agent) { a.Model.Model = strings.Repeat("x", 161) },
-		func(a *agentsuite.Agent) { a.Model.Model = "model\ncredential-canary" },
-		func(a *agentsuite.Agent) { a.Model.EndpointEnv = "CREDENTIAL_CANARY" },
-		func(a *agentsuite.Agent) { a.Model.SecretRefs = []string{"credential-canary"} },
-		func(a *agentsuite.Agent) { a.ToolProviders = []agentsuite.ToolProviderRequirement{{ID: "tool"}} },
-		func(a *agentsuite.Agent) { a.Invokes = []agentsuite.AgentInvoke{{Agent: "other"}} },
-		func(a *agentsuite.Agent) { a.Extensions = []agentsuite.Extension{{Name: "extra"}} },
+	for _, mutate := range []func(*core.Agent){
+		func(a *core.Agent) { a.Model.Protocol = "other" },
+		func(a *core.Agent) { a.Model.Model = "" },
+		func(a *core.Agent) { a.Model.Model = strings.Repeat("x", 161) },
+		func(a *core.Agent) { a.Model.Model = "model\ncredential-canary" },
+		func(a *core.Agent) { a.Model.EndpointEnv = "CREDENTIAL_CANARY" },
+		func(a *core.Agent) { a.Model.SecretRefs = []string{"credential-canary"} },
+		func(a *core.Agent) { a.ToolProviders = []core.ToolProviderRequirement{{ID: "tool"}} },
+		func(a *core.Agent) { a.Invokes = []core.AgentInvoke{{Agent: "other"}} },
+		func(a *core.Agent) { a.Extensions = []core.Extension{{Name: "extra"}} },
 	} {
 		a := agent
 		mutate(&a)
@@ -221,7 +222,7 @@ func TestSuiteModelOnlyPolicyRefusesUnsupportedFeatures(t *testing.T) {
 		}
 	}
 	raw := bytes.Replace(archive.Directory["agents/writer.json"].Data, []byte(`"id":"writer"`), []byte(`"id":"writer","environment":{"SECRET":"credential-canary"}`), 1)
-	if agentsuite.Unmarshal(raw, &agent) == nil {
+	if core.Unmarshal(raw, &agent) == nil {
 		t.Fatal("unknown executable fields accepted")
 	}
 }

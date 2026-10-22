@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
 )
 
 type inventory struct {
@@ -25,7 +25,7 @@ func decodeInventory(data []byte) (inventory, error) {
 		Version int               `json:"version"`
 		Entries []json.RawMessage `json:"entries"`
 	}
-	if err := agentsuite.Unmarshal(data, &wire); err != nil {
+	if err := core.Unmarshal(data, &wire); err != nil {
 		return inventory{}, fmt.Errorf("invalid inventory: %w", err)
 	}
 	if (wire.Version != 1 && wire.Version != 2) || len(wire.Entries) == 0 || len(wire.Entries) > 32 {
@@ -40,24 +40,24 @@ func decodeInventory(data []byte) (inventory, error) {
 				Bundle  string `json:"bundle"`
 				Address string `json:"address"`
 			}
-			err = agentsuite.Unmarshal(raw, &legacy)
+			err = core.Unmarshal(raw, &legacy)
 			e.Bundle, e.Address = legacy.Bundle, legacy.Address
 		} else {
 			var fields map[string]json.RawMessage
-			err = agentsuite.Unmarshal(raw, &fields)
+			err = core.Unmarshal(raw, &fields)
 			if err == nil {
-				err = agentsuite.Unmarshal(fields["kind"], &e.Kind)
+				err = core.Unmarshal(fields["kind"], &e.Kind)
 			}
 			if err == nil {
 				switch e.Kind {
 				case "bundle":
-					err = agentsuite.Unmarshal(raw, &e)
+					err = core.Unmarshal(raw, &e)
 				case "simulated-announcement":
 					var fixed struct {
 						Kind    string `json:"kind"`
 						Address string `json:"address"`
 					}
-					err = agentsuite.Unmarshal(raw, &fixed)
+					err = core.Unmarshal(raw, &fixed)
 					e.Address = fixed.Address
 				default:
 					err = errors.New("unknown entry kind")

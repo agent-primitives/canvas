@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
 	"github.com/google/jsonschema-go/jsonschema"
 	"go.yaml.in/yaml/v3"
 )
@@ -85,7 +85,7 @@ func (d *CompiledDefinition) ValidateFlowInputs(id string, raw []byte) error {
 	}
 	var value any
 	// Preserve strict JSON checks, then give schema validation native numbers.
-	if agentsuite.Unmarshal(raw, &value) != nil || !preservesJSONNumbers(value) || json.Unmarshal(raw, &value) != nil {
+	if core.Unmarshal(raw, &value) != nil || !preservesJSONNumbers(value) || json.Unmarshal(raw, &value) != nil {
 		return errDefinition
 	}
 	if _, ok := value.(map[string]any); !ok || flow.inputs.Validate(value) != nil {

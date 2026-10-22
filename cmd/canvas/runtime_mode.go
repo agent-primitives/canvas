@@ -9,7 +9,7 @@ import (
 	"os"
 	"syscall"
 
-	agentsuite "github.com/agent-primitives/suite"
+	"github.com/agent-primitives/suite/core"
 )
 
 var errRuntimeMode = errors.New("runtime mode binding is invalid or incompatible; use separate state without changing existing history")
@@ -90,7 +90,7 @@ func readRuntimeMode(root *os.Root) (string, bool, error) {
 	}
 	raw, err := io.ReadAll(io.LimitReader(file, 513))
 	var record runtimeModeRecord
-	if err != nil || len(raw) > 512 || agentsuite.Unmarshal(raw, &record) != nil || record.SchemaVersion != "canvas.runtime-mode/v1" || record.Mode != "fixture" && record.Mode != "real" {
+	if err != nil || len(raw) > 512 || core.Unmarshal(raw, &record) != nil || record.SchemaVersion != "canvas.runtime-mode/v1" || record.Mode != "fixture" && record.Mode != "real" {
 		return "", false, errRuntimeMode
 	}
 	return record.Mode, true, nil

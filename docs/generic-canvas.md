@@ -151,7 +151,7 @@ intents only.
 
 ## Identity and evaluation boundaries
 
-`github.com/agent-primitives/suite v0.4.0` validates the captured directory and
+`github.com/agent-primitives/suite v0.7.0` validates the captured directory and
 matching local OCI layout. Both views must have equal full-inventory content
 identity; the layout must match the configured artifact pin. Canvas delegates graph validation and evaluation verification to the shared library.
 It bounds transport and decompression before validation and does not parse kmx private receipts.
