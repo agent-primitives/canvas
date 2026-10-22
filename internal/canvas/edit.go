@@ -17,7 +17,6 @@ import (
 var ErrEditConflict = errors.New("edit request, scope or workspace state conflicts; inspect before acting")
 
 type EditRequest struct {
-	// FlowRun is retained as an explicitly refused input: edits are document-only.
 	FlowRun      string       `json:"flowRun,omitempty"`
 	Document     string       `json:"document"`
 	BaseRevision string       `json:"baseRevision"`
@@ -63,8 +62,12 @@ type editRecord struct {
 	Digest                string                  `json:"digest"`
 	Before                string                  `json:"before"`
 	ReadInputs            []string                `json:"readInputs"`
+	Generation            uint64                  `json:"generation"`
+	PreviousState         string                  `json:"previousState"`
 	Settlement            *editSettlement         `json:"settlement,omitempty"`
 	PublicationPending    bool                    `json:"publicationPending,omitempty"`
+	ResumePending         bool                    `json:"resumePending,omitempty"`
+	RerunPending          bool                    `json:"rerunPending,omitempty"`
 	ReviewResetCount      uint64                  `json:"reviewResetCount,omitempty"`
 	LastUncommittedReview *editReviewIntent       `json:"lastUncommittedReview,omitempty"`
 	ReviewApplied         bool                    `json:"reviewApplied,omitempty"`
@@ -144,7 +147,7 @@ func (c *Canvas) RequestEdit(ctx context.Context, q EditRequest) (EditRun, error
 	if !utf8.ValidString(q.RequestKey) || !safeText(q.CommentRef, 128) {
 		return EditRun{}, ErrEditConflict
 	}
-	if q.FlowRun != "" || c.definition == nil || c.authenticated || c.remoteSessions || !c.flowRole(q.Role) || !safeText(q.Instruction, 2000) || strings.TrimSpace(q.Instruction) == "" || !utf8.ValidString(q.Instruction) || !safeText(q.RequestKey, 128) || len(q.RequestKey) < 8 {
+	if c.definition == nil || c.authenticated || c.remoteSessions || !c.flowRole(q.Role) || !safeText(q.Instruction, 2000) || strings.TrimSpace(q.Instruction) == "" || !utf8.ValidString(q.Instruction) || !safeText(q.RequestKey, 128) || len(q.RequestKey) < 8 {
 		return EditRun{}, ErrEditConflict
 	}
 	_, who, err := c.requester(ctx, q.Role)
@@ -168,12 +171,32 @@ func (c *Canvas) RequestEdit(ctx context.Context, q EditRequest) (EditRun, error
 		c.mu.Unlock()
 		return EditRun{}, ErrEditConflict
 	}
-	if c.activeFlowLocked() {
+	previous := ""
+	var generation uint64
+	if q.FlowRun != "" {
+		f := c.flowLocked(q.FlowRun)
+		if f == nil || f.Attempt == "" || c.flowRecordLocked(f.ID).Generation == 0 || terminalFlow(f.State) || f.State == "uncertain" || f.State == "edited" || f.State == "edit-paused" || f.State == "cancelling" || f.State == "decision" || !c.flowRequester(*f, who, q.Role) || f.Attempts >= f.AgentRuns {
+			c.mu.Unlock()
+			return EditRun{}, ErrEditConflict
+		}
+		if c.flowEditPauseLocked(c.flowRecordLocked(f.ID)) != "" {
+			c.mu.Unlock()
+			return EditRun{}, ErrEditConflict
+		}
+		for _, edit := range c.data.Edits {
+			if edit.Request.FlowRun == f.ID && (edit.RerunPending || edit.ResumePending) {
+				c.mu.Unlock()
+				return EditRun{}, ErrEditConflict
+			}
+		}
+		previous = f.State
+		generation = c.flowRecordLocked(f.ID).Generation
+	} else if c.activeFlowLocked() {
 		c.mu.Unlock()
 		return EditRun{}, ErrEditConflict
 	}
 	for _, op := range c.data.Announcements {
-		if op.Stage == "pending" || op.Stage == "uncertain" || op.EffectReserved && !op.EffectSettled {
+		if op.Stage == "pending" || op.Stage == "uncertain" || op.EffectReserved && (!op.EffectSettled || op.FlowRun == q.FlowRun && q.FlowRun != "") {
 			c.mu.Unlock()
 			return EditRun{}, ErrEditConflict
 		}
@@ -195,13 +218,15 @@ func (c *Canvas) RequestEdit(ctx context.Context, q EditRequest) (EditRun, error
 	c.mu.Unlock()
 	// A document-only edit cannot retire a parked manual action: native Cancel
 	// is unavailable, so refuse before reserving an edit or spending its budget.
-	for _, op := range operations {
-		if op.FlowRun != "" || op.Snapshot.Document != q.Document {
-			continue
-		}
-		view, err := c.inspectAnnouncement(ctx, op)
-		if err != nil || !view.Concluded || view.Confirmation.Unavailable {
-			return EditRun{}, ErrEditConflict
+	if q.FlowRun == "" {
+		for _, op := range operations {
+			if op.FlowRun != "" || op.Snapshot.Document != q.Document {
+				continue
+			}
+			view, err := c.inspectAnnouncement(ctx, op)
+			if err != nil || !view.Concluded || view.Confirmation.Unavailable {
+				return EditRun{}, ErrEditConflict
+			}
 		}
 	}
 	agent, ok := c.definition.EditAgent(q.Document)
@@ -260,7 +285,7 @@ func (c *Canvas) RequestEdit(ctx context.Context, q EditRequest) (EditRun, error
 		return EditRun{}, ErrEditConflict
 	}
 	a.Input = string(raw)
-	r := editRecord{EditRun: EditRun{ID: id, Request: q, State: "queued", Attempt: a.ID, Scope: scope}, Digest: digest, Before: before, Comment: comment, Commands: map[string]string{}}
+	r := editRecord{EditRun: EditRun{ID: id, Request: q, State: "queued", Attempt: a.ID, Scope: scope}, Digest: digest, Before: before, Generation: generation, PreviousState: previous, Comment: comment, Commands: map[string]string{}}
 	for _, name := range declared.Read {
 		if d := c.definition.documents[name]; d.input {
 			r.ReadInputs = append(r.ReadInputs, d.path)
@@ -273,6 +298,15 @@ func (c *Canvas) RequestEdit(ctx context.Context, q EditRequest) (EditRun, error
 		return EditRun{}, e
 	}
 	a.ExecutionOwner = owner
+	if q.FlowRun != "" {
+		f := c.flowRecordLocked(q.FlowRun)
+		if f == nil || f.State != previous || f.Generation != generation || f.Attempts >= f.AgentRuns || f.ExecutionOwner != owner {
+			return EditRun{}, ErrEditConflict
+		}
+		f.Attempts++
+		f.EditIDs = append(f.EditIDs, id)
+		f.State = "editing"
+	}
 	if c.service != nil {
 		c.data.ExecutionOwner = owner
 	}
@@ -324,8 +358,16 @@ func (c *Canvas) observeEditAttemptLocked(a *attempt) {
 	}
 }
 func (c *Canvas) releaseEditLocked(r *editRecord) {
-	if c.data.EditSlot == r.ID {
+	held := c.data.EditSlot == r.ID
+	if held {
 		c.data.EditSlot = ""
+	}
+	if f := c.flowLocked(r.Request.FlowRun); held && f != nil && c.flowRecordLocked(f.ID).Generation == r.Generation && !terminalFlow(f.State) && f.State != "cancelling" {
+		f.State = "edit-paused"
+		if r.State == "accepted" {
+			f.State = "edited"
+		}
+		f.Reason = "Explicit edit resume, rerun or cancellation is required."
 	}
 }
 func (c *Canvas) editChanges(r editRecord, a attempt, output string) (map[string]string, error) {
@@ -406,6 +448,9 @@ func (c *Canvas) reopenEditsLocked() error {
 		}
 		if r.ID == c.data.EditSlot {
 			r.State = "uncertain"
+			if f := c.flowLocked(r.Request.FlowRun); f != nil {
+				f.State = "editing"
+			}
 		}
 	}
 	if len(c.data.Edits) > 128 || c.data.EditSlot != "" && !seen[c.data.EditSlot] {
@@ -418,6 +463,33 @@ func rRequestActor(c *Canvas, r *editRecord) sharedspace.ReviewActor {
 		return a.RequestedBy
 	}
 	return sharedspace.ReviewActor{}
+}
+
+// A released edit pause is durable, not evidence to reconstruct from an old
+// ordinary attempt. Only its explicit resume/rerun command may consume it.
+func (c *Canvas) flowEditPauseLocked(f *flowRunRecord) string {
+	if f == nil || f.CancelRequested {
+		return ""
+	}
+	for i := len(f.EditIDs) - 1; i >= 0; i-- {
+		e := c.editLocked(f.EditIDs[i])
+		if e == nil || e.Generation != f.Generation {
+			continue
+		}
+		if e.State == "accepted" && !e.RerunPending {
+			for _, cp := range f.EditCheckpoints {
+				if cp.Edit == e.ID {
+					return ""
+				}
+			}
+			return "edited"
+		}
+		if (e.State == "rejected" || e.State == "failed" || e.State == "abandoned" || e.State == "stale") && (e.Commands["resume"] == "" || e.ResumePending) {
+			return "edit-paused"
+		}
+		return ""
+	}
+	return ""
 }
 
 func (c *Canvas) editCommandLocked(r *editRecord, q EditMaintenance, kind string) error {
@@ -453,6 +525,12 @@ func (c *Canvas) AbandonEdit(ctx context.Context, q EditMaintenance) (EditRun, e
 	}
 	if r.ReviewAction != "" || c.data.EditSlot != r.ID || (r.State != "queued" && r.State != "running" && r.State != "uncertain" && r.State != "proposal") {
 		return EditRun{}, ErrEditConflict
+	}
+	if r.Request.FlowRun != "" {
+		f := c.flowRecordLocked(r.Request.FlowRun)
+		if f == nil || f.Generation != r.Generation || f.CancelRequested {
+			return EditRun{}, ErrEditConflict
+		}
 	}
 	head, e := c.space.Head()
 	if e != nil || head != q.ExpectedHead || c.editCommandLocked(r, q, "abandon") != nil {

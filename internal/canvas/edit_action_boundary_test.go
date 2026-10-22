@@ -98,3 +98,51 @@ func TestEditPreservesConcludedSameDocumentManualAction(t *testing.T) {
 		t.Fatal("concluded receipt lost", view, e)
 	}
 }
+func TestEditRevokesOnlyOwnFlowUnexecutedHandles(t *testing.T) {
+	c, _ := workflowFixture(t, true, func(input map[string]any) string {
+		if input["edit"] != nil {
+			return changeEnvelope("prd", validPRD)
+		}
+		return ""
+	})
+	p := acceptedAnnouncement(t, c, "# Earlier concluded manual action\n")
+	id, e := c.RequestAnnouncement(context.Background(), "announce", p.ID, "GM")
+	if e != nil {
+		t.Fatal(e)
+	}
+	v := confirmedAnnouncement(t, c, id)
+	if e = c.DecideAnnouncement(context.Background(), id, "GM", false, v.Confirmation); e != nil {
+		t.Fatal(e)
+	}
+	v = confirmedAnnouncement(t, c, id)
+	if e = c.ContinueAnnouncement(context.Background(), id, "GM", v.Confirmation); e != nil {
+		t.Fatal(e)
+	}
+	old, _ := c.announcementOperation(id)
+	before, _ := json.Marshal(old)
+	f := startWorkflow(t, c, "own-flow-handle-edit", 12)
+	for range 3 {
+		f = waitWorkflow(t, c, f.ID, "review")
+		if _, e = c.Review(f.Proposal, "accept", "reviewer"); e != nil {
+			t.Fatal(e)
+		}
+	}
+	f = waitWorkflow(t, c, f.ID, "action")
+	r, e := c.RequestEdit(context.Background(), editRequest(t, c, f.ID, "own-flow-only-edit"))
+	if e != nil {
+		t.Fatal(e)
+	}
+	r = waitEdit(t, c, r.ID, "proposal")
+	if _, e = c.Review(r.Proposal, "accept", "GM"); e != nil {
+		t.Fatal(e)
+	}
+	current, _ := c.announcementOperation(f.Action)
+	if !current.Revoked || current.EffectReserved {
+		t.Fatal("own unexecuted handle not invalidated", current)
+	}
+	old, _ = c.announcementOperation(id)
+	after, _ := json.Marshal(old)
+	if string(before) != string(after) {
+		t.Fatal("other concluded operation was changed")
+	}
+}

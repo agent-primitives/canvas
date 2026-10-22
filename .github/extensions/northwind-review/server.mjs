@@ -7,7 +7,7 @@ import { constants } from 'node:fs';
 
 const routes = {
   GET: new Set(['/api/state', '/api/document', '/api/announcement', '/api/demo', '/api/forks', '/api/flows', '/api/flow', '/api/edits', '/api/edit', '/api/edit/context']),
-  POST: new Set(['/api/run', '/api/review', '/api/verify', '/api/announcement/request', '/api/announcement/decision', '/api/announcement/continue', '/api/announcement/verify', '/api/flow/start', '/api/flow/changes', '/api/flow/retry', '/api/flow/cancel', '/api/flow/reconcile', '/api/flow/advance', '/api/flow/verify', '/api/edit/request', '/api/edit/reconcile', '/api/edit/abandon']),
+  POST: new Set(['/api/run', '/api/review', '/api/verify', '/api/announcement/request', '/api/announcement/decision', '/api/announcement/continue', '/api/announcement/verify', '/api/flow/start', '/api/flow/changes', '/api/flow/retry', '/api/flow/cancel', '/api/flow/reconcile', '/api/flow/advance', '/api/flow/verify', '/api/edit/request', '/api/edit/reconcile', '/api/edit/abandon', '/api/edit/resume', '/api/edit/rerun']),
 };
 const authoringReads = new Set(['/api/authoring', '/api/authoring/candidate', '/api/authoring/file', '/api/authoring/instance']);
 const authoringWrites = new Set(['/api/authoring/prepare', '/api/authoring/activate']);
@@ -122,7 +122,7 @@ export async function startBridge(options = {}) {
     const editRoute = url.pathname === '/api/edits' || url.pathname.startsWith('/api/edit');
     if (editRoute) {
       if (['authenticated-sessions', 'trusted-loopback-sessions', 'hosted-sessions'].includes(initialDemo.mode) || (initialDemo.mode === 'inert-authoring' && !instance)) return reply(res, 404, { error: 'Local edit prototype unavailable' });
-      const allowed = req.method === 'GET' ? ({ '/api/edits': [], '/api/edit': ['id'], '/api/edit/context': ['document'] }[url.pathname] || []) : [];
+      const allowed = req.method === 'GET' ? ({ '/api/edits': [], '/api/edit': ['id'], '/api/edit/context': ['document', 'flowRun'] }[url.pathname] || []) : [];
       const seen = new Set(), query = new URLSearchParams();
       for (const [key, value] of url.searchParams) {
         if (!allowed.includes(key) || seen.has(key)) return reply(res, 400, { error: 'Unsupported edit query' });

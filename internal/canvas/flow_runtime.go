@@ -48,7 +48,15 @@ type flowCommand struct {
 
 // Keep exact input bytes outside RawMessage: indented ledger encoding rewrites
 // RawMessage whitespace, but request-key equality and frozen inputs are byte-bound.
+type editCheckpoint struct {
+	Edit              string `json:"edit"`
+	BeforeGeneration  uint64 `json:"beforeGeneration"`
+	AcceptedCommit    string `json:"acceptedCommit"`
+	RestartGeneration uint64 `json:"restartGeneration"`
+}
 type flowRunRecord struct {
+	EditIDs         []string         `json:"editIDs,omitempty"`
+	EditCheckpoints []editCheckpoint `json:"editCheckpoints,omitempty"`
 	FlowRun
 	InputBytes      []byte                  `json:"inputBytes,omitempty"`
 	Reviews         []flowReviewIntent      `json:"reviews,omitempty"`
@@ -324,6 +332,15 @@ func (c *Canvas) dispatchFlowLocked(ctx context.Context, id string, trigger shar
 	r.Generation++
 	a.FlowGeneration = r.Generation
 	r.Generations = append(r.Generations, flowGeneration{Number: r.Generation, Previous: previous, Step: s.ID, Attempt: a.ID})
+	var completingEdits []string
+	for _, cp := range r.EditCheckpoints {
+		if cp.RestartGeneration == r.Generation {
+			if edit := c.editLocked(cp.Edit); edit != nil && edit.RerunPending {
+				completingEdits = append(completingEdits, edit.ID)
+				edit.RerunPending = false
+			}
+		}
+	}
 	c.finishAdvanceReservationLocked(live, advanceKeys)
 	live.Attempts++
 	live.Step = s.ID
@@ -337,6 +354,9 @@ func (c *Canvas) dispatchFlowLocked(ctx context.Context, id string, trigger shar
 	a.Order = uint64(len(c.data.Attempts) + 1)
 	c.data.Attempts = append(c.data.Attempts, a)
 	if err = c.saveLocked(); err != nil {
+		for _, edit := range completingEdits {
+			c.editLocked(edit).RerunPending = true
+		}
 		c.persistenceFailureLocked(c.findLocked(a.ID))
 		live = c.flowLocked(id)
 		live.State = "uncertain"
@@ -378,6 +398,12 @@ func (c *Canvas) observeFlowAttemptLocked(a *attempt) {
 	if a.Status == "proposed" && a.Proposal != "" {
 		f.State = "review"
 		f.Proposal = a.Proposal
+		for i := range c.data.Edits {
+			edit := &c.data.Edits[i]
+			if edit.Request.FlowRun == f.ID && edit.Generation == a.FlowGeneration {
+				edit.ResumePending = false
+			}
+		}
 	} else if a.Status == "failed" || a.Status == "uncertain" {
 		f.State = "uncertain"
 		if a.FlowStage == "completed" || a.FlowStage == "queued" {
@@ -671,6 +697,19 @@ func (c *Canvas) CancelFlow(ctx context.Context, r FlowCancel) (FlowRun, error) 
 		c.mu.Unlock()
 		return f, ErrFlowConflict
 	}
+	for _, edit := range c.data.Edits {
+		if edit.Request.FlowRun == f.ID && c.data.EditSlot == edit.ID && edit.ReviewAction != "" {
+			c.mu.Unlock()
+			return f, ErrFlowConflict
+		}
+	}
+	for i := range c.data.Edits {
+		edit := &c.data.Edits[i]
+		if edit.Request.FlowRun == f.ID && c.data.EditSlot == edit.ID {
+			edit.State = "abandoned"
+			c.data.EditSlot = ""
+		}
+	}
 	rec.CancelRequested = true
 	rec.CancelledBy = who
 	rec.Revocation++
@@ -724,6 +763,11 @@ func (c *Canvas) reopenFlowsLocked() {
 			if f.CancelRequested {
 				f.State = "cancelling"
 				f.Reason = "Cancellation fence retained after reopen; explicit settlement required."
+				continue
+			}
+			if pause := c.flowEditPauseLocked(f); pause != "" {
+				f.State = pause
+				f.Reason = "Explicit edit resume or first-step rerun is required."
 				continue
 			}
 			f.State = "uncertain"

@@ -98,7 +98,6 @@ test('document-only edit iframe keeps exact lost request, reviews a scoped nativ
   const accepted = await p.api('/api/edit/context?document=prd');
   assert.equal((await p.api('/api/flows')).runs.length, 0);
   assert.equal((await p.api('/api/demo')).providerCalls, 0);
-  assert.equal(await p.frame.locator('#edit-resume, #edit-rerun').count(), 0);
   await p.frame.locator('#edit-panel').waitFor({ state: 'visible' });
   await p.frame.locator('#edit-kind').selectOption('json-pointer');
   await p.frame.locator('#edit-pointer').fill('/title');
@@ -365,6 +364,68 @@ test('document-only edit iframe refuses native scope escape without changing acc
   assert.equal((await p.api('/api/flows')).runs.length, 0);
   assert.equal((await p.api('/api/demo')).providerCalls, 1, 'one native attempt; failed scope validation does not retry');
   assert.equal(p.posts.filter(post => post.path.startsWith('/api/flow/')).length, 0);
+  assert.deepEqual(p.errors, []);
+});
+
+test('scoped edit iframe keeps exact lost request, proposes without accepting and explicitly reruns first step', async t => {
+  let lost = false;
+  const p = await flowPanel(t, undefined, false, async (page, bridge) => {
+    await page.route(bridge.origin + '/api/edit/request', async route => {
+      if (!lost) { lost = true; await route.fetch(); await route.abort('failed'); }
+      else await route.continue();
+    });
+  });
+  await startTopic(p, 'Scoped edit topic');
+  const before = await p.api('/api/state');
+  await p.frame.locator('#edit-panel').waitFor({ state: 'visible' });
+  await p.frame.locator('#edit-kind').selectOption('json-pointer');
+  await p.frame.locator('#edit-pointer').fill('/title');
+  await p.frame.locator('#edit-instruction').fill('Revise the title of this fictional PRD.');
+  await p.frame.locator('#edit-confirm:not(:disabled)').check();
+  await p.frame.locator('#edit-request:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Exact request retained' }).waitFor();
+  assert.equal((await p.api('/api/state')).head, before.head, 'request never accepts bytes');
+  // The lost admission reply can precede completion of its producer. Wait on
+  // read-only evidence first: a queued→proposal poll deliberately revokes a
+  // click bound to the older evidence, and must not be mistaken for a retry.
+  await p.frame.getByText('Edit record', { exact: true }).click();
+  await p.frame.locator('#edit-detail').filter({ hasText: '"state": "proposal"' }).waitFor();
+  await p.ready(); await p.frame.locator('#edit-continue:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Edit: proposal' }).waitFor(); await p.ready();
+  const requests = p.posts.filter(post => post.path === '/api/edit/request');
+  assert.equal(requests.length, 2); assert.deepEqual(requests[0].body, requests[1].body, 'lost reply continuation retains exact key/payload');
+  assert.equal((await p.api('/api/demo')).providerCalls, 2, 'one ordinary and one edit producer, not a repeated edit');
+  assert.equal((await p.api('/api/state')).head, before.head);
+  await p.frame.locator('#document-confirm:not(:disabled)').check();
+  await p.frame.locator('#accept:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Edit: accepted' }).waitFor(); await p.ready();
+  assert.notEqual((await p.api('/api/state')).head, before.head, 'only human acceptance changes accepted bytes');
+  await p.frame.locator('#edit-command-confirm:not(:disabled)').check();
+  await p.frame.locator('#edit-rerun:not(:disabled)').click();
+  await p.frame.locator('#flow-location').filter({ hasText: 'Step 1:' }).waitFor();
+  await p.frame.locator('#flow-status').filter({ hasText: 'Waiting for reviewer' }).waitFor();
+  const flows = await p.api('/api/flows');
+  assert.equal(flows.runs[0].position, 0); assert.equal(flows.runs[0].attempts, 3);
+  assert.equal((await p.api('/api/demo')).providerCalls, 3);
+  assert.deepEqual(p.errors, []);
+});
+
+test('scoped edit iframe refuses native scope escape and resumes only by explicit command', async t => {
+  const p = await flowPanel(t); await startTopic(p, 'Scope escape topic');
+  const before = await p.api('/api/state');
+  await p.frame.locator('#edit-kind').selectOption('json-pointer');
+  await p.frame.locator('#edit-pointer').fill('/problem');
+  await p.frame.locator('#edit-instruction').fill('Change only the selected problem.');
+  await p.frame.locator('#edit-confirm:not(:disabled)').check();
+  await p.frame.locator('#edit-request:not(:disabled)').click();
+  await p.frame.locator('#edit-status').filter({ hasText: 'Edit: failed' }).waitFor(); await p.ready();
+  assert.equal((await p.api('/api/state')).head, before.head, 'fixture title output outside problem scope is refused');
+  const paused = await p.api('/api/flows'); assert.equal(paused.runs[0].state, 'edit-paused');
+  await p.frame.locator('#edit-command-confirm:not(:disabled)').check();
+  await p.frame.locator('#edit-resume:not(:disabled)').click();
+  await p.frame.locator('#flow-status').filter({ hasText: 'Waiting for reviewer' }).waitFor();
+  const resumed = await p.api('/api/flows'); assert.equal(resumed.runs[0].attempts, 2);
+  assert.equal((await p.api('/api/demo')).providerCalls, 2, 'resuming a still-current gate dispatches nothing');
   assert.deepEqual(p.errors, []);
 });
 

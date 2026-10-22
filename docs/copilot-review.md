@@ -19,30 +19,38 @@ To draft a new definition without starting an engine, use the separate
 A local v1alpha3 definition with a compiled `editAgent` binding exposes the edit
 panel. Select an accepted document, inspect its exact revision/digest and full
 content, choose whole-document, JSON Pointer, or supported ATX heading scope,
-and supply an instruction. Edits are **document-only**: every nonempty flow-run
-association refuses, and no edit is admitted while any nonterminal flow is active.
-This creates a proposal, **not accepted bytes**.
+and supply an instruction. This creates a proposal, **not accepted bytes**.
 Review every replacement in the existing proposal review before Accept/Reject.
 A missing or invalid explicit selector refuses rather than becoming a whole edit.
 The deterministic Northwind fixture edits only the PRD title and does not
 interpret instructions or qualify live inference.
 
-The single durable slot fences competing manual/flow actions, reviews and
-Continue. An unsettled manual action on the same document refuses edit admission;
-editing never retires that handle. A lost reply retains the exact request or
-maintenance command for explicit continuation. Polling, opening and reopening do
-not retry, publish, accept or dispatch work. Reject/failure preserves accepted
-bytes; acceptance is a separate whole-proposal decision and invalidates old-base
-proposals, without starting or reopening a flow.
+The single durable slot fences competing decisions and Continue. A lost reply
+retains the exact request or maintenance command for explicit continuation;
+polling, opening and reopening do not retry, publish, accept or dispatch work.
+Document-only requests refuse while any nonterminal flow is active or the same
+document has an unsettled manual action; editing never retires that manual handle.
+With an eligible current flow selected, the panel explicitly associates the
+inspected context and request with that flow. For an associated edit,
+Reject/failure preserves accepted bytes and requires explicit Resume. Accept invalidates old-base proposals and
+that flow's affected unexecuted action handles, then requires an explicit
+first-step Rerun using the same remaining flow budget, without inherited approvals.
+Completed/effect-committed flows use a separate document-only edit; its acceptance
+never starts or reopens a flow.
 
-Explicit Reconcile can recover recorded native/Git publication or review evidence.
-An abandoned edit may also use read-back-only reconciliation to prove its exact
-owned native END; this clears only admission bookkeeping, never publishes the
-abandoned output. Unknown or missing execution identity remains fenced. Local
-abandonment is not native cancellation. Flow-associated edits, Resume/Rerun,
-shared-budget integration and edit replay are future work, not controls in this
-panel. See [edit boundaries and recovery](flow-runtime.md#scoped-document-edit-proposals)
-for selector support, edit-only number guards, limits and incomplete-proof cases.
+The minimum durable request/native/Git publication and review recovery also
+protects standalone document-only edits. Explicit Reconcile inspects exact evidence;
+a proven uncommitted review restores a proposal for fresh whole-proposal human
+review, never replays the decision. An abandoned edit may also use read-back-only
+reconciliation to prove its exact owned native END. Optional native settlement
+clears only admission bookkeeping, never publishes abandoned output or accepts,
+dispatches or resumes work. Missing/unknown execution identity remains fenced.
+The same proof applies to flow-associated abandoned attempts, not just standalone
+ones. Native Cancel remains unsupported; local abandonment/revocation is not
+native settlement, and unresolved native action work still blocks rerun.
+See [edit boundaries and replay](flow-runtime.md#scoped-document-edit-proposals)
+for selector support, edit-only number guards, limits, local-only APIs and
+incomplete-proof cases.
 Chat drafts reviewable file diffs; it does not activate, approve or continue.
 
 ## Start the engine
@@ -108,8 +116,8 @@ cancellation or settled execution. Aggregate replay reports incomplete coverage
 honestly and only shows 0/0 when actual linked native proofs establish it.
 
 This path uses an operator-loaded definition. For frozen draft activation use the
-separate mode below. Scoped edits, version comparison, MCP and agent-callable SDK
-actions remain absent. No visual redesign or actual Copilot app/WSL, hosted
+separate mode below. Version comparison, MCP and agent-callable SDK actions
+remain absent. No visual redesign or actual Copilot app/WSL, hosted
 identity, real-action or cloud qualification is implied.
 
 ## Freeze, review and activate a draft

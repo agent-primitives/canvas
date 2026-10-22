@@ -28,7 +28,7 @@ test('edit panel retains one exact request after lost replies and never posts du
  global.crypto ||= require('node:crypto').webcrypto;
  const reads=[];
  let loseReply = true;
- const posts=[],ctx={document:'prd',path:'prd.json',agent:'writer',baseRevision:'head',baseDigest:'digest',content:'{"title":"Before"}'};
+ const posts=[],ctx={document:'prd',path:'prd.json',agent:'writer',baseRevision:'head',baseDigest:'digest',content:'{"title":"Before"}',flowRun:''};
  const api=async(route,body)=> {
   if(body){ posts.push(structuredClone(body)); if(loseReply){loseReply=false;throw new Error('lost reply');} return {id:'edit-1',state:'queued',request:body}; }
   if(route==='/api/edits')return {edits:[],slot:'',documents:[{id:'prd',title:'PRD',path:'prd.json',agent:'writer'}]};
@@ -54,7 +54,6 @@ test('edit panel retains one exact request after lost replies and never posts du
  assert.equal(posts[0].section.pointer,'/title');assert(!Object.hasOwn(posts[0],'flowRun'));
  assert.deepEqual(reads,['/api/edit/context?document=prd','/api/edit/context?document=prd']);
  assert.equal(saved,null,'only confirmed continuation clears the saved exact request');
- assert.equal(nodes.has('edit-resume'),false,'no edit Resume listener/control');assert.equal(nodes.has('edit-rerun'),false,'no edit Rerun listener/control');
  // A different inspected instance cannot reuse the retained old-instance body.
  loseReply=true;
  nodes.get('edit-confirm').checked=true;
@@ -94,7 +93,7 @@ test('proposal review stays fenced after a recorded maintenance error until expl
  const api=async(route,body)=>{
   if(body){posts.push({route,body:structuredClone(body)});if(posts.length===1)return new Promise((resolve,reject)=>{rejectRead=reject});return edit}
   if(route==='/api/edits')return {slot:edit.id,edits:[edit],documents:[{id:'prd',path:'prd.json'}]};
-  return {document:'prd',baseRevision:'head-1',content:'{"title":"Before"}'};
+  return {document:'prd',baseRevision:'head-1',flowRun:'',content:'{"title":"Before"}'};
  };
  const panel=createEditPanel({api,action:async cb=>{try{await cb()}catch(error){failure=error}},selectionChanged(){}});
  const refresh=()=>panel.refresh({head:'head-1'},{boot:'boot-1',activeInstance:'instance-1'});
@@ -124,51 +123,69 @@ test('proposal review stays fenced after a recorded maintenance error until expl
  assert.equal(panel.isGate(edit.proposal),true,'fresh human review becomes available only after confirmed continuation');
 });
 
-test('document edit admission stays disabled for every active flow including failed, without flow query or request association', async () => {
+test('flow edit rerun maintenance releases only proven unreserved refusals and retains exact unknown commands', async () => {
+ const {createEditPanel}=await loadPanel();
+ for(const refused of [true,false]) {
+  const nodes=new Map();global.document={getElementById(id){if(!nodes.has(id))nodes.set(id,{value:'',checked:false,disabled:false,hidden:false,textContent:'',add(){},replaceChildren(){}});return nodes.get(id)}};
+  global.Option=class{};global.sessionStorage={getItem:()=>null,setItem(){},removeItem(){}};global.crypto||=require('node:crypto').webcrypto;
+  const posts=[];const edit={id:'edit-1',state:'accepted',request:{document:'prd',role:'GM',flowRun:'flow-1'}};
+  const api=async(route,body)=>{if(body){posts.push({route,body:structuredClone(body)});if(posts.length===1)throw Object.assign(new Error('synthetic command outcome'),{code:refused?'EDIT_REFUSED':'EDIT_UNCERTAIN',status:refused?409:500,uncertain:!refused});return {id:'flow-1'}};if(route==='/api/edits')return {slot:'',edits:[edit],documents:[{id:'prd',path:'prd.json'}]};return {document:'prd',baseRevision:'head',flowRun:'flow-1',content:'{"title":"Before"}'}};
+  const panel=createEditPanel({api,action:async cb=>{try{await cb()}catch{}},selectionChanged(){},currentFlow:()=>({id:'flow-1',state:'edited'})});
+  await panel.refresh({head:'head'},{boot:'boot',activeInstance:''});nodes.get('edit-command-confirm').checked=true;
+  await nodes.get('edit-rerun').onclick();assert.equal(panel.blocked(),!refused);
+  if(!refused){await panel.refresh({head:'head'},{boot:'boot',activeInstance:''});assert.equal(posts.length,1);await nodes.get('edit-continue').onclick();assert.deepEqual(posts[1],posts[0]);assert.equal(panel.blocked(),false)}
+ }
+});
+
+test('flow edit binds the inspected active flow and preserves that exact association after a lost reply', async () => {
  const {createEditPanel}=await loadPanel();const nodes=new Map();
  global.document={getElementById(id){if(!nodes.has(id))nodes.set(id,{value:'',checked:false,disabled:false,hidden:false,textContent:'',add(){},replaceChildren(){}});return nodes.get(id)}};
  global.Option=class{};global.sessionStorage={getItem:()=>null,setItem(){},removeItem(){}};global.crypto||=require('node:crypto').webcrypto;
- let flow=null;const reads=[],posts=[];
- const api=async(route,body)=>{if(body){posts.push(body);return {id:'edit-1'}};reads.push(route);if(route==='/api/edits')return {slot:'',edits:[],documents:[{id:'prd',path:'prd.json'}]};return {document:'prd',baseRevision:'head',baseDigest:'digest',flowRun:'',content:'{"title":"Before"}'}};
- const panel=createEditPanel({api,action:cb=>cb(),selectionChanged(){},currentFlow:()=>flow});
- await panel.refresh({head:'head'},{boot:'boot',activeInstance:''});
- nodes.get('edit-instruction').value='Change title';nodes.get('edit-kind').value='whole';
- for(const state of ['starting','running','review','paused','uncertain','ready','cancelling','action','approved-not-executed','failed']) {
-  flow={id:'flow-1',state};
-  await panel.refresh({head:'head'},{boot:'boot',activeInstance:''});
-  nodes.get('edit-confirm').checked=true;panel.controls(true,true);
-  assert.equal(nodes.get('edit-request').disabled,true,state+' must fence document-only admission');
-  assert.equal(nodes.get('edit-confirm').disabled,true);
-  assert.match(nodes.get('edit-status').textContent,/document-only.*active flow/i);
-  await nodes.get('edit-request').onclick();
-  assert.equal(posts.length,0,'even a stale click must not admit during '+state);
- }
- assert.ok(reads.filter(route=>route.startsWith('/api/edit/context')).every(route=>route==='/api/edit/context?document=prd'));
- for(const state of ['complete','rejected','cancelled','denied','exhausted']) {
-  flow={id:'finished',state};
-  await panel.refresh({head:'head'},{boot:'boot',activeInstance:''});nodes.get('edit-confirm').checked=true;panel.controls(true,true);
-  assert.equal(nodes.get('edit-request').disabled,false,state+' preserves existing terminal semantics');
- }
+ let flow={id:'flow-1',state:'review'};const reads=[],posts=[];
+ const api=async(route,body)=>{
+  if(body){posts.push(structuredClone(body));if(posts.length===1)throw new Error('lost reply');return {id:'edit-1'}}
+  reads.push(route);
+  if(route==='/api/edits')return {slot:'',edits:[],documents:[{id:'prd',path:'prd.json'}]};
+  return {document:'prd',baseRevision:'head',baseDigest:'digest',flowRun:new URLSearchParams(route.split('?')[1]).get('flowRun')||'',content:'{"title":"Before"}'};
+ };
+ const panel=createEditPanel({api,action:async cb=>{try{await cb()}catch{}},selectionChanged(){},currentFlow:()=>flow});
+ assert.equal(await panel.refresh({head:'head'},{boot:'boot',activeInstance:''}),true);
+ nodes.get('edit-instruction').value='Change title';nodes.get('edit-kind').value='whole';nodes.get('edit-confirm').checked=true;panel.controls(true,true);
+ assert.equal(nodes.get('edit-request').disabled,false,'an inspected active flow can receive an explicitly associated edit');
+ const firstKey=panel.key();
  await nodes.get('edit-request').onclick();
- assert.equal(posts.length,1);assert.equal(Object.hasOwn(posts[0],'flowRun'),false);
+ assert.equal(posts.length,1);assert.equal(posts[0].flowRun,'flow-1');assert.equal(panel.blocked(),true);
+ flow={id:'flow-2',state:'review'};
+ assert.equal(await panel.refresh({head:'head'},{boot:'boot',activeInstance:''}),true);
+ assert.notEqual(panel.key(),firstKey,'flow association changes revoke old inspection');
+ assert.equal(nodes.get('edit-confirm').checked,false);
+ assert.equal(posts.length,1,'refresh never submits against the newly selected flow');
+ await nodes.get('edit-continue').onclick();
+ assert.equal(posts.length,2);assert.deepEqual(posts[1],posts[0],'exact continuation keeps the original flow, key and payload');
+ assert.deepEqual(reads.filter(route=>route.startsWith('/api/edit/context')),['/api/edit/context?document=prd&flowRun=flow-1','/api/edit/context?document=prd&flowRun=flow-2']);
 });
 
-test('document admission inspects every flow even when terminal history is selected', async () => {
- const source=fs.readFileSync(path.join(root,'.github/extensions/northwind-review/flow.js'),'utf8');
- const {createFlowPanel}=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
- const nodes=new Map();global.document={getElementById(id){if(!nodes.has(id))nodes.set(id,{value:'',checked:false,disabled:false,hidden:false,textContent:'',dataset:{},add(){},append(){},replaceChildren(){},querySelectorAll(){return []}});return nodes.get(id)}};
- global.Option=class{};
- const panel=createFlowPanel({api:async()=>{},action:cb=>cb(),selectionChanged(){},requesterRole:'GM'});
- const flow={id:'release',definition:{steps:[],limits:{agentRuns:1}},schema:{type:'object',properties:{}}};
- const done={id:'old',flow:'release',state:'complete',position:0};
- const failed={id:'active',flow:'release',state:'failed',position:0};
- const snapshot={head:'head',definition:{title:'Fixture',id:'fixture',digest:'digest'},flows:[flow],runs:[done,failed],documents:{},operatorAgentRuns:1};
- panel.update(snapshot,{agents:[],runs:[],proposals:[]});
- nodes.get('flow-history').value='old';nodes.get('flow-history').onchange();
- assert.equal(panel.current().id,'old');
- assert.equal(panel.activeFlow().id,'active','failed work remains an admission fence independent of history selection');
- panel.update({...snapshot,runs:[done,{...failed,state:'cancelled'}]},{agents:[],runs:[],proposals:[]});
- assert.equal(panel.activeFlow(),undefined);
+test('terminal flows never acquire a new edit association and mismatched flow context cannot dispatch', async () => {
+ const {createEditPanel}=await loadPanel();
+ for(const state of ['complete','rejected','cancelled','denied','exhausted','review']) {
+  const nodes=new Map();global.document={getElementById(id){if(!nodes.has(id))nodes.set(id,{value:'',checked:false,disabled:false,hidden:false,textContent:'',add(){},replaceChildren(){}});return nodes.get(id)}};
+  global.Option=class{};global.sessionStorage={getItem:()=>null,setItem(){},removeItem(){}};global.crypto||=require('node:crypto').webcrypto;
+  const reads=[],posts=[];
+  const api=async(route,body)=>{if(body){posts.push(body);return {id:'edit-1'}};reads.push(route);if(route==='/api/edits')return {slot:'',edits:[],documents:[{id:'prd',path:'prd.json'}]};return {document:'prd',baseRevision:'head',baseDigest:'digest',flowRun:state==='review'?'wrong-flow':'',content:'{"title":"Before"}'}};
+  const panel=createEditPanel({api,action:cb=>cb(),selectionChanged(){},currentFlow:()=>({id:'selected',state})});
+  const refreshed=await panel.refresh({head:'head'},{boot:'boot',activeInstance:''});
+  nodes.get('edit-instruction').value='Change title';nodes.get('edit-kind').value='whole';nodes.get('edit-confirm').checked=true;panel.controls(true,true);
+  if(state==='review') {
+   assert.equal(refreshed,false,'a context for another flow is never adopted');
+   assert.equal(nodes.get('edit-request').disabled,true);
+   await nodes.get('edit-request').onclick();assert.equal(posts.length,0);
+   assert.deepEqual(reads.filter(route=>route.startsWith('/api/edit/context')),['/api/edit/context?document=prd&flowRun=selected']);
+  } else {
+   assert.equal(refreshed,true);assert.equal(nodes.get('edit-request').disabled,false);
+   await nodes.get('edit-request').onclick();assert.equal(posts.length,1);assert.equal(Object.hasOwn(posts[0],'flowRun'),false);
+   assert.deepEqual(reads.filter(route=>route.startsWith('/api/edit/context')),['/api/edit/context?document=prd']);
+  }
+ }
 });
 
 test('abandoned edit native settlement is explicit read-back and never a producer retry', async () => {

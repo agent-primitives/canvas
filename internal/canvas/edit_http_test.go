@@ -63,19 +63,12 @@ func TestEditHTTPReadOnlyAndLocalGuard(t *testing.T) {
 			t.Fatalf("unsafe context: %d", w.Code)
 		}
 	}
-	for _, path := range []string{"/api/edit/resume", "/api/edit/rerun"} {
-		w := httptest.NewRecorder()
-		mux.ServeHTTP(w, httptest.NewRequest("POST", path, strings.NewReader("{}")))
-		if w.Code != http.StatusNotFound {
-			t.Fatalf("flow continuation route retained: %s: %d", path, w.Code)
-		}
-	}
 	for _, remote := range []bool{false, true} {
 		c.authenticated = !remote
 		c.remoteSessions = remote
-		for _, path := range []string{"/api/edits", "/api/edit?id=x", "/api/edit/context?document=prd", "/api/edit/request", "/api/edit/reconcile", "/api/edit/abandon"} {
+		for _, path := range []string{"/api/edits", "/api/edit?id=x", "/api/edit/context?document=prd", "/api/edit/request", "/api/edit/reconcile", "/api/edit/abandon", "/api/edit/resume", "/api/edit/rerun"} {
 			method := "GET"
-			if strings.Contains(path, "/request") || strings.Contains(path, "/reconcile") || strings.Contains(path, "/abandon") {
+			if strings.Contains(path, "/request") || strings.Contains(path, "/reconcile") || strings.Contains(path, "/abandon") || strings.Contains(path, "/resume") || strings.Contains(path, "/rerun") {
 				method = "POST"
 			}
 			w := httptest.NewRecorder()

@@ -76,6 +76,30 @@ func (c *Canvas) registerEditRoutes(mux *http.ServeMux) {
 		e, err := c.AbandonEdit(r.Context(), q)
 		sendEditResult(w, e, c.editMaintenanceError(q, "abandon", err), 200)
 	})
+	handle("POST /api/edit/resume", func(w http.ResponseWriter, r *http.Request) {
+		var q EditMaintenance
+		if !decodeEditAction(w, r, &q) {
+			return
+		}
+		f, err := c.ResumeAfterEdit(r.Context(), q)
+		if err != nil {
+			sendEditResult(w, EditRun{}, c.editMaintenanceError(q, "resume", err), 200)
+			return
+		}
+		sendJSON(w, 200, presentFlow(f, false))
+	})
+	handle("POST /api/edit/rerun", func(w http.ResponseWriter, r *http.Request) {
+		var q EditMaintenance
+		if !decodeEditAction(w, r, &q) {
+			return
+		}
+		f, err := c.RerunAfterEdit(r.Context(), q)
+		if err != nil {
+			sendEditResult(w, EditRun{}, c.editMaintenanceError(q, "rerun", err), 200)
+			return
+		}
+		sendJSON(w, 200, presentFlow(f, false))
+	})
 }
 
 func (c *Canvas) editContextHTTP(w http.ResponseWriter, r *http.Request) {
@@ -88,8 +112,14 @@ func (c *Canvas) editContextHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if flow != "" {
-		sendEditResult(w, EditRun{}, ErrEditConflict, 200)
-		return
+		c.mu.Lock()
+		f := c.flowLocked(flow)
+		valid := f != nil && !terminalFlow(f.State)
+		c.mu.Unlock()
+		if !valid {
+			sendEditResult(w, EditRun{}, ErrEditConflict, 200)
+			return
+		}
 	}
 	head, err := c.space.Head()
 	if err != nil {
@@ -101,7 +131,7 @@ func (c *Canvas) editContextHTTP(w http.ResponseWriter, r *http.Request) {
 		sendEditResult(w, EditRun{}, internalError(err), 200)
 		return
 	}
-	sendJSON(w, 200, map[string]string{"document": id, "path": doc.path, "agent": doc.editAgent, "baseRevision": head, "baseDigest": editScopeHash(content), "content": content})
+	sendJSON(w, 200, map[string]string{"document": id, "path": doc.path, "agent": doc.editAgent, "baseRevision": head, "baseDigest": editScopeHash(content), "content": content, "flowRun": flow})
 }
 
 // Check the token tree without float conversion: neither duplicate keys nor
