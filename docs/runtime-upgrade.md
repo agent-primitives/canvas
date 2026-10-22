@@ -1,13 +1,13 @@
 # Sessions runtime compatibility
 
-Canvas builds against canonical `github.com/agent-primitives/sessions` upstream
-main at `f18a2cb1454d1eea0c9e9063646a5251653bd95e`, including native approval,
-authentication interceptors and guarded Resume:
+Canvas builds against the canonical `github.com/agent-primitives/sessions`
+v0.3.0 release, including native approval, authentication interceptors and guarded
+Resume:
 
-- Core: `v0.2.1-0.20261019224537-f18a2cb1454d`
-- Substrate integration: `v0.0.0-20261019224537-f18a2cb1454d`
-- Resolved Substrate: `v0.4.1-0.20261013053953-96dffb287919`, upgraded from
-  `fc0e3586a6de` through the integration's module requirement.
+- Core: `v0.3.0` (`bcbd4d9dcb352a10444119c2e6f75b4715dc68e0`).
+- Substrate integration: `v0.3.0`, tagged `integrations/substrate/v0.3.0`
+  (`d74eec3477722c2e6a8580815f86d5b6eaa27090`).
+- Resolved Substrate: `v0.5.0`, required by the integration.
 - Go floor: 1.27.0 (required by the integration); selected toolchain: 1.27.3.
 
 These are ordinary Go module requirements, without fork or workspace replacements. Use
@@ -17,14 +17,17 @@ The Docker build-stage digest is the registry-verified multi-platform index for
 
 ## Journal upgrade and backup
 
-Stop the host and Canvas before taking a consistent backup of their entire state
-directories, including the journal and immutable contract archive. Preserve that
-backup separately before starting the new binary. Do not copy only a live SQLite
-main file: uncheckpointed changes may be in its WAL.
+Stop the host, Canvas and every other process sharing the journal before taking
+a consistent backup of their entire state directories, including the journal and
+immutable contract archive. Preserve that backup separately before starting the
+new binary, and upgrade all writers before restarting any of them. Do not copy
+only a live SQLite main file: uncheckpointed changes may be in its WAL.
 
-Journals written by the fork pin `ce018b2daa0f` are already SQLite schema 5
-and open with this upstream pin without migration. Upstream Sessions' controller
-now verifies the journal hash chain before Exec, Replay and Resume and refuses a
+Journals written by the fork pin `ce018b2daa0f` or the previous upstream pin
+`f18a2cb1454d` use SQLite schema 5 and migrate to schema 6 on open. Schema 6 adds
+per-session model-policy state; existing sessions remain legacy. It does not
+rewrite recorded event bytes or hashes. Upstream Sessions' controller
+verifies the journal hash chain before Exec, Replay and Resume and refuses a
 broken chain. The Exec and Resume RPCs surface that failure as gRPC `DataLoss`.
 The read-only Replay RPC still streams stored records without checking them;
 Canvas checks replay hashes itself, and its Verify diagnostic rejects a broken
@@ -32,10 +35,10 @@ chain with `FailedPrecondition`. These checks do not repair the journal or
 replace a stopped-state backup.
 
 Opening a journal written by the earlier Canvas pin, `9a3d755c1072`, migrates its
-SQLite schema from version 1 to version 5, including the harness registry,
-approval-reporting and authentication schemas. Migration alone does not authorize or
-continue an approval; the separate local action requires explicit inspection,
-decision and guarded continuation.
+SQLite schema from version 1 to version 6, including the harness registry,
+approval-reporting, authentication and model-policy schemas. Migration alone does
+not authorize or continue an approval; the separate local action requires explicit
+inspection, decision and guarded continuation.
 Migration happens on open, not only on the first new turn. An old binary refuses
 the newer schema. In-place downgrade is not supported or qualified; restoring the
 stopped-state backup is a separate operator action and discards later writes.
@@ -48,7 +51,7 @@ and one completed fork-child turn. It contains no operator journal or real model
 output. The fixture bundle has instructions `old pin fixture instructions`, model
 `fixture-model`, and output `{"strategy":"old-pin-fictional"}`. Its parent prefix
 is four records; the child retains that prefix, its fork marker, and its own turn.
-The regression copies the database before opening it, checks schema 1 → 5 and
+The regression copies the database before opening it, checks schema 1 → 6 and
 byte-identical existing event rows/hashes/fences, preserves lineage, and verifies
 completed replay and explicit Resume without a provider call. This is bounded
 upgrade evidence, not a general journal-repair or rollback qualification.
@@ -57,13 +60,33 @@ The fork-pin regression uses `internal/sessionhost/testdata/ce018b2-native.db`,
 written through Canvas at `58be923` with its normal `ce018b2daa0f` fork dependencies.
 It contains one completed native question turn and one unanswered native model
 intent in separate sessions, using only scripted fictional provider results. The
-test records the generation procedure, checks schema 5 and unchanged historical
+test records the generation procedure, checks schema 5 → 6 and unchanged historical
 event rows/hashes/fences, and verifies both chains. Completed reconstruction and
 Resume make zero provider calls; startup and read-only verification never reissue
 the unanswered intent. Explicitly resuming that intent makes exactly one provider
 call; subsequent Resume and verification make no extra calls.
 
 ## Substrate lifecycle and transport
+
+Substrate v0.5.0 is **not an in-place upgrade** from the previous `96dffb287919`
+pin. Reinstall Substrate with fresh state and recreate templates and actors using
+the matching v0.5.0 API and v0.3.0 adapter. Old actors and their held checkpoints
+do not carry over; restoring a Sessions journal alone does not migrate them.
+Rollback likewise requires a matching older Substrate installation and adapter,
+not a downgrade over v0.5.0 state. These are compatibility warnings, not a
+supported Canvas cluster-deployment procedure. See the upstream
+[Sessions v0.3.0 compatibility notes](https://github.com/agent-primitives/sessions/blob/v0.3.0/CHANGELOG.md#substrate-v050).
+
+The API reports a paused actor as `SUSPENDED` with a node-local newest snapshot
+and a pausing actor as `SUSPENDING`, rather than `PAUSED`/`PAUSING`. The adapter
+refuses a local-only newest snapshot until Suspend makes it durable; a pending
+upload is `UNAVAILABLE`, and a transitioning actor is `ABORTED`. Native Restore
+also refuses a held checkpoint that differs from the journal's reference with
+`FAILED_PRECONDITION`: inspect the actor and Suspend the stateless session again
+to record its current durable checkpoint before Resume. It does not fall back to
+an older completed snapshot. Suspend on v0.5.0 returns only after upload completes.
+Memory-tier sessions have stricter loss refusals; Canvas's factories admit only
+stateless replay descriptors.
 
 The default backend still releases and deletes an actor on suspension. Current
 placement calls only `Snapshot`, so the Canvas default wrapper invokes native
@@ -76,7 +99,13 @@ and retains the actor/checkpoint without calling `Stop`. Explicit teardown and
 failed-fork cleanup remain destructive. Both policies expose stateless journal
 identity references to Sessions, not native memory-snapshot references. Neither
 promises snapshot-free activation: Substrate selects the actor's own checkpoint,
-a template snapshot, or a fresh start. There is no per-call Boot flag.
+a template snapshot, or a fresh start. There is no per-call Boot flag. Canvas's
+identity-only Restore goes through native Create, not native Restore's exact
+held-reference comparison; native checkpoint readiness checks still apply.
+
+Substrate v0.5.0 also requires a pod namespace calling ate-api-server to carry
+`ate.dev/api-access=true` under its default NetworkPolicy. This does not enable
+Sessions authentication or change Canvas's existing transport configuration.
 
 ActorTemplates are now atespace-scoped. The existing `-template-namespace` setting
 is passed as the template's **atespace**, not a Kubernetes namespace. Harness

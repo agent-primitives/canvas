@@ -191,15 +191,16 @@ Prerequisites for a future hosted qualification (not a runnable procedure):
 
 ## Dependency compatibility
 
-Both sessions and its Substrate integration are pinned to upstream commit
-`f18a2cb1454d`. The provider adapter applies recorded schema and generation hints
-at the HTTP boundary without changing the journaled request or its replay hashes.
-This affects all Canvas commands, not just tests. Opening an existing session journal migrates
-it to schema 5; the migration test checks that old event bytes/hashes and completed
-zero-call reconstruction remain unchanged. Back up state first; rollback to the
-old sessions binary against a migrated journal is not qualified. The existing
-Substrate adapter tests are adjusted to the matching `ActorInfo` API, without
-changing Canvas's runtime behavior.
+Sessions and its Substrate integration are pinned to v0.3.0, with Substrate
+v0.5.0. The provider adapter applies recorded schema and generation hints at the
+HTTP boundary without changing the journaled request or its replay hashes. This
+affects all Canvas commands, not just tests. Opening an existing session journal
+migrates it to schema 6; the migration tests check that old event bytes/hashes and
+completed zero-call reconstruction remain unchanged. Stop all journal writers and
+back up state first; in-place downgrade is not supported. Substrate requires a
+fresh-state reinstall, not an in-place update. See
+[runtime compatibility](runtime-upgrade.md) for the rollout and held-snapshot
+limits. Canvas's authentication and runtime policies are unchanged.
 
 ## Execution ownership and human decisions (local fake contract only)
 
